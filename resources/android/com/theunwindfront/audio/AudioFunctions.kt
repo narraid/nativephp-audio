@@ -4,7 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
-import com.theunwindfront.mobile.bridge.BridgeFunction
+import com.nativephp.mobile.bridge.BridgeFunction
 import org.json.JSONObject
 
 class AudioFunctions {
