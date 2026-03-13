@@ -1,3 +1,8 @@
+## 🎵 NativePHP Audio Player v1.0.2
+
+### Fixes
+- **Android**: Fixed incorrect `BridgeFunction` import in `AudioFunctions.kt`.
+
 ## 🎵 NativePHP Audio Player v1.0.1
 
 ### Fixes
