@@ -14,13 +14,13 @@ A NativePHP plugin for audio playback on mobile devices.
 
 ```bash
 # Install the package
-composer require theunwindfront/audio
+composer require theunwindfront/nativephp-audio
 
 # Publish the plugins provider (first time only)
 php artisan vendor:publish --tag=nativephp-plugins-provider
 
 # Register the plugin
-php artisan native:plugin:register theunwindfront/audio
+php artisan native:plugin:register theunwindfront/nativephp-audio
 
 # Verify registration
 php artisan native:plugin:list
@@ -56,7 +56,7 @@ $position = Audio::getCurrentPosition();
 ### JavaScript (Vue/React/Inertia)
 
 ```javascript
-import { audioPlayer } from '@theunwindfront/audio';
+import { audioPlayer } from '@theunwindfront/nativephp-audio';
 
 // Play an audio file
 await audioPlayer.play('https://www.w3schools.com/html/horse.mp3');
