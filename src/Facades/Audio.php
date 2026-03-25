@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static bool setVolume(float $level)
  * @method static float|null getDuration()
  * @method static float|null getCurrentPosition()
+ * @method static bool setMetadata(string $title, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null)
  *
  * @see \Theunwindfront\Audio\Audio
  */

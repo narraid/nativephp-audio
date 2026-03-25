@@ -151,4 +151,41 @@ class Audio
 
         return null;
     }
+
+    /**
+     * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
+     *
+     * @param  string       $title    Track title
+     * @param  string|null  $artist   Artist name
+     * @param  string|null  $album    Album name
+     * @param  string|null  $artwork  URL or local path to artwork image
+     * @param  float|null   $duration Total track duration in seconds
+     */
+    public function setMetadata(
+        string $title,
+        ?string $artist = null,
+        ?string $album = null,
+        ?string $artwork = null,
+        ?float $duration = null,
+    ): bool {
+        if (function_exists('nativephp_call')) {
+            $params = array_filter([
+                'title' => $title,
+                'artist' => $artist,
+                'album' => $album,
+                'artwork' => $artwork,
+                'duration' => $duration,
+            ], fn ($v) => $v !== null);
+
+            $result = nativephp_call('Audio.setMetadata', json_encode($params));
+
+            if ($result) {
+                $decoded = json_decode($result);
+
+                return $decoded->success ?? false;
+            }
+        }
+
+        return false;
+    }
 }

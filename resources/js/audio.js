@@ -22,6 +22,14 @@ const audioPlayer = {
     },
     getCurrentPosition: async () => {
         return await window.nativephp.call('Audio.getCurrentPosition');
+    },
+    setMetadata: async ({ title, artist = null, album = null, artwork = null, duration = null } = {}) => {
+        const params = { title };
+        if (artist !== null) params.artist = artist;
+        if (album !== null) params.album = album;
+        if (artwork !== null) params.artwork = artwork;
+        if (duration !== null) params.duration = duration;
+        return await window.nativephp.call('Audio.setMetadata', params);
     }
 };
 

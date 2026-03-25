@@ -122,3 +122,37 @@ For questions or issues, email pansuriya.sagar94@gmail.com
 ## License
 
 The MIT License (MIT). Please see [License File](LICENSE) for more information.
+
+MediaSession Support — What was added
+
+PHP (src/Audio.php + src/Facades/Audio.php)
+- New setMetadata(title, artist, album, artwork, duration) method — bridges to native via Audio.setMetadata
+- Facade @method annotation added
+
+iOS (resources/ios/AudioFunctions.swift)
+- Imports MediaPlayer framework
+- New SetMetadata class sets MPNowPlayingInfoCenter.default().nowPlayingInfo with title, artist, album, duration, elapsed time, and playback rate
+- Artwork loaded from local file path or remote URL (synchronous fetch — happens on the bridge thread)
+- Activates AVAudioSession so remote-control events are delivered to the lock screen / Control Center
+
+Android (resources/android/.../AudioFunctions.kt)
+- Imports MediaSessionCompat, MediaMetadataCompat, PlaybackStateCompat
+- Shared MediaSessionCompat instance created lazily via getOrCreateSession()
+- New SetMetadata class populates MediaMetadataCompat (title, artist, album, duration, artwork bitmap) and sets an initial PlaybackStateCompat — making the track visible on lock screens, Bluetooth devices, and Android Auto
+
+Bridge manifest (nativephp.json)
+- Registered Audio.setMetadata for both platforms
+- Added androidx.media:media:1.7.0 dependency (provides MediaSessionCompat)
+- Added android.permission.MEDIA_CONTENT_CONTROL permission
+
+JavaScript (resources/js/audio.js)
+- setMetadata({ title, artist, album, artwork, duration }) method added
+
+Usage example:                                                                                                                                                                                                                                                          
+Audio::setMetadata(                                                                                                                                                                                                                                                       
+title: 'Song Title',
+artist: 'Artist Name',                                                                                                                                                                                                                                                
+album: 'Album Name',                                                                                                                                                                                                                                                
+artwork: 'https://example.com/cover.jpg',
+duration: 243.5,                         
+);                                                                        

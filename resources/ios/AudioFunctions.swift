@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import MediaPlayer
 
 /**
  * AudioFunctions houses all BridgeFunction implementations for audio playback control
@@ -151,6 +152,61 @@ enum AudioFunctions {
             let position = AudioFunctions.player?.currentTime().seconds ?? 0.0
             let validPosition = position.isNaN ? 0.0 : position
             return BridgeResponse.success(data: ["position": validPosition])
+        }
+    }
+
+    /**
+     * Sets track metadata on MPNowPlayingInfoCenter for display on lock screens,
+     * Control Center, Bluetooth devices, and CarPlay.
+     *
+     * Expected parameters:
+     *  - `title`    (String, required) – track title.
+     *  - `artist`   (String, optional) – artist name.
+     *  - `album`    (String, optional) – album name.
+     *  - `artwork`  (String, optional) – URL or local path of the artwork image.
+     *  - `duration` (Number, optional) – total duration in seconds.
+     */
+    class SetMetadata: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let title = parameters["title"] as? String else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "title is required.")
+            }
+
+            var info: [String: Any] = [:]
+            info[MPMediaItemPropertyTitle] = title
+
+            if let artist = parameters["artist"] as? String {
+                info[MPMediaItemPropertyArtist] = artist
+            }
+            if let album = parameters["album"] as? String {
+                info[MPMediaItemPropertyAlbumTitle] = album
+            }
+            if let duration = (parameters["duration"] as? NSNumber)?.doubleValue {
+                info[MPMediaItemPropertyPlaybackDuration] = duration
+            }
+
+            // Preserve elapsed time so the scrubber stays accurate
+            let elapsed = AudioFunctions.player?.currentTime().seconds ?? 0.0
+            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isNaN ? 0.0 : elapsed
+            info[MPNowPlayingInfoPropertyPlaybackRate] = AudioFunctions.player?.rate ?? 0.0
+
+            if let artworkString = parameters["artwork"] as? String {
+                // Try local file path first, then remote URL
+                if let image = UIImage(contentsOfFile: artworkString) {
+                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                } else if let url = URL(string: artworkString),
+                          let data = try? Data(contentsOf: url),
+                          let image = UIImage(data: data) {
+                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                }
+            }
+
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
+            // Activate the audio session so remote-control events are delivered
+            try? AVAudioSession.sharedInstance().setActive(true)
+
+            return BridgeResponse.success(data: ["success": true])
         }
     }
 }

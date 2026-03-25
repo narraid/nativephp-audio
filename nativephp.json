@@ -49,16 +49,25 @@
             "android": "com.theunwindfront.audio.AudioFunctions.GetCurrentPosition",
             "ios": "AudioFunctions.GetCurrentPosition",
             "description": "Get the current playback position in seconds"
+        },
+        {
+            "name": "Audio.setMetadata",
+            "android": "com.theunwindfront.audio.AudioFunctions.SetMetadata",
+            "ios": "AudioFunctions.SetMetadata",
+            "description": "Set track metadata (title, artist, album, artwork, duration) for lock screens, Bluetooth devices, and OS media centers"
         }
     ],
 
     "android": {
         "min_version": 21,
         "permissions": [
-            "android.permission.INTERNET"
+            "android.permission.INTERNET",
+            "android.permission.MEDIA_CONTENT_CONTROL"
         ],
         "dependencies": {
-            "implementation": []
+            "implementation": [
+                "androidx.media:media:1.7.0"
+            ]
         },
         "activities": [],
         "services": [],
