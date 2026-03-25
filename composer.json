@@ -1,5 +1,5 @@
 {
-    "name": "narraid/nativephp-audio",
+    "name": "theunwindfront/nativephp-audio",
     "description": "Audio player plugin for NativePHP Mobile apps",
     "version": "1.0.2",
     "type": "nativephp-plugin",
