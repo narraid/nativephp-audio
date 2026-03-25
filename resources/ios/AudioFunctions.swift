@@ -17,8 +17,26 @@ enum AudioFunctions {
     private static var playerItem: AVPlayerItem?
     /** Observer token for the end-of-play event. */
     private static var completionObserver: Any?
+    /** Observer token for playback failure. */
+    private static var failureObserver: Any?
     /** Guard so MPRemoteCommandCenter handlers are only registered once per process lifetime. */
     private static var remoteCommandsRegistered = false
+    /** URL of the currently loaded track — used in remote-command events. */
+    private static var currentURL: String = ""
+
+    // MARK: - Position / duration helpers
+
+    /** Current playback position in seconds, NaN-safe. */
+    private static func positionSeconds() -> Double {
+        let p = player?.currentTime().seconds ?? 0.0
+        return p.isNaN ? 0.0 : p
+    }
+
+    /** Total duration of the loaded item in seconds, NaN-safe. */
+    private static func durationSeconds() -> Double {
+        let d = playerItem?.duration.seconds ?? 0.0
+        return d.isNaN ? 0.0 : d
+    }
 
     // MARK: - Remote command centre
 
@@ -42,7 +60,10 @@ enum AudioFunctions {
             guard AudioFunctions.player != nil else { return .noSuchContent }
             AudioFunctions.player?.play()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", [:])
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ])
             return .success
         }
 
@@ -51,7 +72,10 @@ enum AudioFunctions {
             guard AudioFunctions.player != nil else { return .noSuchContent }
             AudioFunctions.player?.pause()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [:])
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ])
             return .success
         }
 
@@ -60,10 +84,16 @@ enum AudioFunctions {
             guard let player = AudioFunctions.player else { return .noSuchContent }
             if player.rate > 0 {
                 player.pause()
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [:])
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [
+                    "position": AudioFunctions.positionSeconds(),
+                    "duration": AudioFunctions.durationSeconds()
+                ])
             } else {
                 player.play()
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", [:])
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", [
+                    "position": AudioFunctions.positionSeconds(),
+                    "duration": AudioFunctions.durationSeconds()
+                ])
             }
             AudioFunctions.syncNowPlayingState()
             return .success
@@ -91,6 +121,7 @@ enum AudioFunctions {
      *  - `url` (String, required) – the URI of the audio resource to play.
      *
      * On success fires [PlaybackStarted]. On completion fires [PlaybackCompleted].
+     * On error fires [PlaybackFailed].
      * Returns a BridgeResponse error when `url` is missing or invalid.
      */
     class Play: BridgeFunction {
@@ -100,8 +131,11 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
 
-            // Cleanup previous observer if any
+            // Cleanup previous observers if any
             if let observer = AudioFunctions.completionObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            if let observer = AudioFunctions.failureObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
 
@@ -115,6 +149,7 @@ enum AudioFunctions {
             // Register lock-screen / Bluetooth remote-control command handlers
             AudioFunctions.setupRemoteCommands()
 
+            AudioFunctions.currentURL = urlString
             AudioFunctions.playerItem = AVPlayerItem(url: url)
             AudioFunctions.player = AVPlayer(playerItem: AudioFunctions.playerItem)
 
@@ -124,7 +159,24 @@ enum AudioFunctions {
                 object: AudioFunctions.playerItem,
                 queue: .main
             ) { _ in
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackCompleted", ["url": urlString])
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackCompleted", [
+                    "url": urlString,
+                    "duration": AudioFunctions.durationSeconds()
+                ])
+            }
+
+            // Add failure observer
+            AudioFunctions.failureObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemFailedToPlayToEndTime,
+                object: AudioFunctions.playerItem,
+                queue: .main
+            ) { notification in
+                let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
+                    .localizedDescription ?? "Unknown error"
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackFailed", [
+                    "url": urlString,
+                    "error": error
+                ])
             }
 
             AudioFunctions.player?.play()
@@ -136,26 +188,32 @@ enum AudioFunctions {
 
     /**
      * Pauses the currently playing audio without releasing the AVPlayer.
-     * Fires [PlaybackPaused] after pausing.
+     * Fires [PlaybackPaused] with the current position and duration.
      */
     class Pause: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.pause()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [:])
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ])
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
     /**
      * Resumes a previously paused AVPlayer.
-     * Fires [PlaybackStarted] (reusing the started event) after resuming.
+     * Fires [PlaybackResumed] with the current position and duration.
      */
     class Resume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.play()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", [:])
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ])
             return BridgeResponse.success(data: ["success": true])
         }
     }
@@ -163,10 +221,14 @@ enum AudioFunctions {
     /**
      * Stops playback and fully releases the AVPlayer state.
      * After this call player is nil and a new Play call is required to resume audio.
-     * Fires [PlaybackStopped].
+     * Fires [PlaybackStopped] with the position and duration captured before release.
      */
     class Stop: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            // Capture state before releasing the player
+            let position = AudioFunctions.positionSeconds()
+            let duration = AudioFunctions.durationSeconds()
+
             AudioFunctions.player?.pause()
             AudioFunctions.player = nil
             AudioFunctions.playerItem = nil
@@ -174,16 +236,24 @@ enum AudioFunctions {
                 NotificationCenter.default.removeObserver(observer)
                 AudioFunctions.completionObserver = nil
             }
+            if let observer = AudioFunctions.failureObserver {
+                NotificationCenter.default.removeObserver(observer)
+                AudioFunctions.failureObserver = nil
+            }
             // Deactivate the session so other apps can resume their audio
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", [:])
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", [
+                "position": position,
+                "duration": duration
+            ])
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
     /**
      * Seeks the playback position to the given number of seconds.
+     * Fires [PlaybackSeeked] with from, to, and duration once the seek completes.
      *
      * Expected parameters:
      *  - `seconds` (Number, optional, default 0) – target position in seconds.
@@ -191,8 +261,16 @@ enum AudioFunctions {
     class Seek: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let seconds = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
+            let from = AudioFunctions.positionSeconds()
+            let duration = AudioFunctions.durationSeconds()
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
-            AudioFunctions.player?.seek(to: time)
+            AudioFunctions.player?.seek(to: time) { _ in
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackSeeked", [
+                    "from": from,
+                    "to": seconds,
+                    "duration": duration
+                ])
+            }
             return BridgeResponse.success(data: ["success": true])
         }
     }

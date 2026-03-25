@@ -106,8 +106,11 @@
     "events": [
         "Theunwindfront\\Audio\\Events\\PlaybackStarted",
         "Theunwindfront\\Audio\\Events\\PlaybackPaused",
+        "Theunwindfront\\Audio\\Events\\PlaybackResumed",
         "Theunwindfront\\Audio\\Events\\PlaybackStopped",
         "Theunwindfront\\Audio\\Events\\PlaybackCompleted",
+        "Theunwindfront\\Audio\\Events\\PlaybackSeeked",
+        "Theunwindfront\\Audio\\Events\\PlaybackFailed",
         "Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated"
     ],
 

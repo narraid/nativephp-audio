@@ -216,3 +216,44 @@ Bridge updated with audio-resumed, audio-seeked, audio-failed custom events.
 One thing to note: the native side (Swift/Kotlin) will need to be updated to pass the new payload fields when dispatching these events. The PlaybackPaused, PlaybackStopped,   
 PlaybackResumed, PlaybackSeeked, and PlaybackFailed events especially require the native layer to provide position/duration at the moment they fire.
 
+
+Here's a summary of all the changes made:
+                                                                                          
+---
+iOS (AudioFunctions.swift)
+
+┌─────────────────────────────────────┬─────────────────────────────┬─────────────────────────────────────────────────────────────┐                             
+│                Event                │           Before            │                            After                            │                             
+├─────────────────────────────────────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┤                           
+│ PlaybackStarted (remote play cmd)   │ PlaybackStarted + [:]       │ PlaybackResumed + {position, duration}                      │
+├─────────────────────────────────────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┤
+│ PlaybackPaused (remote/Pause class) │ [:]                         │ {position, duration}                                        │                             
+├─────────────────────────────────────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┤                             
+│ PlaybackResumed (Resume class)      │ fired PlaybackStarted + [:] │ fires PlaybackResumed + {position, duration}                │                             
+├─────────────────────────────────────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┤                             
+│ PlaybackStopped (Stop class)        │ [:]                         │ {position, duration} captured before player released        │                           
+├─────────────────────────────────────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┤                             
+│ PlaybackCompleted                   │ {url}                       │ {url, duration}                                             │                           
+├─────────────────────────────────────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┤                             
+│ PlaybackSeeked                      │ not fired                   │ fires in seek completion callback with {from, to, duration} │                           
+├─────────────────────────────────────┼─────────────────────────────┼─────────────────────────────────────────────────────────────┤                             
+│ PlaybackFailed                      │ not fired                   │ fires on AVPlayerItemFailedToPlayToEndTime                  │                           
+└─────────────────────────────────────┴─────────────────────────────┴─────────────────────────────────────────────────────────────┘
+
+Added currentURL, positionSeconds(), durationSeconds() helpers. Added failureObserver static var alongside completionObserver.
+   
+---                                                                                                                                                             
+Android (AudioFunctions.kt)
+
+- Play constructor changed to FragmentActivity — stores a WeakReference used by all subsequent dispatches
+- Added sendEvent() helper in companion (marshals to main thread via Handler)
+- Play.execute: fires PlaybackStarted; sets onCompletionListener → PlaybackCompleted; sets onErrorListener → PlaybackFailed
+- Pause.execute: fires PlaybackPaused with {position, duration}
+- Resume.execute: fires PlaybackResumed with {position, duration}
+- Stop.execute: fires PlaybackStopped with {position, duration} (captured before release)
+- Seek.execute: fires PlaybackSeeked with {from, to, duration}
+- togglePlayPause(): fires PlaybackPaused or PlaybackResumed accordingly
+
+nativephp.json
+
+Added PlaybackResumed, PlaybackSeeked, and PlaybackFailed to the events array for PluginRegistry auto-discovery.        
