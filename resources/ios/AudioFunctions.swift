@@ -39,6 +39,13 @@ enum AudioFunctions {
                 NotificationCenter.default.removeObserver(observer)
             }
 
+            // Configure the audio session for background playback before creating the player.
+            // .playback category allows audio to continue when the screen locks or the
+            // app moves to the background. This must be set before AVPlayer starts.
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playback, mode: .default)
+            try? session.setActive(true)
+
             AudioFunctions.playerItem = AVPlayerItem(url: url)
             AudioFunctions.player = AVPlayer(playerItem: AudioFunctions.playerItem)
 
@@ -96,6 +103,9 @@ enum AudioFunctions {
                 NotificationCenter.default.removeObserver(observer)
                 AudioFunctions.completionObserver = nil
             }
+            // Deactivate the session so other apps can resume their audio
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", [:])
             return BridgeResponse.success(data: ["success": true])
         }

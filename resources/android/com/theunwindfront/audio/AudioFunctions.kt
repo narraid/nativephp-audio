@@ -57,6 +57,8 @@ class AudioFunctions {
                     prepare()
                     start()
                 }
+                // Start the foreground service so playback survives backgrounding
+                AudioService.start(context)
                 result.put("success", true)
             } catch (e: Exception) {
                 result.put("success", false)
@@ -86,6 +88,7 @@ class AudioFunctions {
             mediaPlayer?.stop()
             mediaPlayer?.release()
             mediaPlayer = null
+            AudioService.stop(context)
             return mapOf("success" to true)
         }
     }
@@ -182,6 +185,13 @@ class AudioFunctions {
                     1.0f
                 )
             session.setPlaybackState(stateBuilder.build())
+
+            // Refresh the foreground service notification with the new track info
+            AudioService.updateNotification(
+                context,
+                title,
+                params.optString("artist").takeIf { it.isNotEmpty() }
+            )
 
             return mapOf("success" to true)
         }

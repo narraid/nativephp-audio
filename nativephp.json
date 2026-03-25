@@ -62,15 +62,25 @@
         "min_version": 21,
         "permissions": [
             "android.permission.INTERNET",
-            "android.permission.MEDIA_CONTENT_CONTROL"
+            "android.permission.MEDIA_CONTENT_CONTROL",
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+            "android.permission.WAKE_LOCK"
         ],
         "dependencies": {
             "implementation": [
-                "androidx.media:media:1.7.0"
+                "androidx.media:media:1.7.0",
+                "androidx.core:core-ktx:1.13.1"
             ]
         },
         "activities": [],
-        "services": [],
+        "services": [
+            {
+                "name": "com.theunwindfront.audio.AudioService",
+                "foreground_service_type": "mediaPlayback",
+                "exported": false
+            }
+        ],
         "receivers": [],
         "providers": []
     },
@@ -78,7 +88,8 @@
     "ios": {
         "min_version": "13.0",
         "info_plist": {
-            "NSAppleMusicUsageDescription": "We need access to your music library to play audio files."
+            "NSAppleMusicUsageDescription": "We need access to your music library to play audio files.",
+            "UIBackgroundModes": ["audio"]
         },
         "dependencies": {
             "swift_packages": [],

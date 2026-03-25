@@ -156,3 +156,33 @@ album: 'Album Name',
 artwork: 'https://example.com/cover.jpg',
 duration: 243.5,                         
 );                                                                        
+
+
+                                                                                                                                                                                                                                                                           
+---                                                                                                                                                                                                                                                                     
+Background Playback — What was added
+
+iOS (AudioFunctions.swift)
+- Play: configures AVAudioSession with .playback category and activates it before the AVPlayer starts — this is the single most important change; without it iOS suspends audio the moment the app backgrounds
+- Stop: deactivates the session with .notifyOthersOnDeactivation so other apps can reclaim audio, and clears MPNowPlayingInfoCenter
+
+nativephp.json (iOS)
+- Added "UIBackgroundModes": ["audio"] to info_plist — tells iOS this app is permitted to run audio in the background; without this entry the OS ignores the session category
+
+Android — new AudioService.kt
+- A START_STICKY foreground service that shows a persistent "Now Playing" notification
+- Android requires a foreground service + visible notification to keep any process alive when backgrounded; without it the OS will kill the MediaPlayer within seconds of the screen turning off
+- start(context, title, artist) — starts/restarts the service (called by Play)
+- stop(context) — stops the service and dismisses the notification (called by Stop)
+- updateNotification(context, title, artist) — refreshes the notification text (called by SetMetadata)
+- Creates a NotificationChannel for Android 8+, uses IMPORTANCE_LOW so it's silent
+
+Android AudioFunctions.kt
+- Play: calls AudioService.start(context) after MediaPlayer begins
+- Stop: calls AudioService.stop(context) after releasing MediaPlayer
+- SetMetadata: calls AudioService.updateNotification(...) so the notification shows the real track title/artist
+
+nativephp.json (Android)
+- Added FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PLAYBACK (Android 14+), and WAKE_LOCK permissions
+- Registered AudioService under services with foreground_service_type: mediaPlayback
+- Added androidx.core:core-ktx:1.13.1 dependency (for NotificationCompat)                             
