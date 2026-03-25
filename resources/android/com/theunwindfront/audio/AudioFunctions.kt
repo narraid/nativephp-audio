@@ -18,6 +18,9 @@ class AudioFunctions {
         private var mediaPlayer: MediaPlayer? = null
         private var mediaSession: MediaSessionCompat? = null
 
+        /** Last artwork bitmap, shared with AudioService for the notification large icon. */
+        internal var currentArtwork: Bitmap? = null
+
         private fun JSONObject.toMap(): Map<String, Any> {
             val map = mutableMapOf<String, Any>()
             val keys = this.keys()
@@ -33,6 +36,37 @@ class AudioFunctions {
                 it.isActive = true
                 mediaSession = it
             }
+        }
+
+        fun getSessionToken(context: Context): MediaSessionCompat.Token =
+            getOrCreateSession(context).sessionToken
+
+        fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
+
+        /** Toggle play/pause from the notification action button. */
+        fun togglePlayPause() {
+            if (mediaPlayer?.isPlaying == true) mediaPlayer?.pause()
+            else mediaPlayer?.start()
+            updateSessionState()
+        }
+
+        /** Sync MediaSession PlaybackState with current MediaPlayer state. */
+        fun updateSessionState() {
+            val session = mediaSession ?: return
+            val playing = mediaPlayer?.isPlaying == true
+            val state = PlaybackStateCompat.Builder()
+                .setActions(
+                    PlaybackStateCompat.ACTION_PLAY or
+                    PlaybackStateCompat.ACTION_PAUSE or
+                    PlaybackStateCompat.ACTION_SEEK_TO
+                )
+                .setState(
+                    if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                    (mediaPlayer?.currentPosition ?: 0).toLong(),
+                    if (playing) 1.0f else 0.0f
+                )
+                .build()
+            session.setPlaybackState(state)
         }
     }
 
@@ -72,6 +106,8 @@ class AudioFunctions {
     class Pause(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             mediaPlayer?.pause()
+            updateSessionState()
+            AudioService.refreshPlayState(context)
             return mapOf("success" to true)
         }
     }
@@ -79,6 +115,8 @@ class AudioFunctions {
     class Resume(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             mediaPlayer?.start()
+            updateSessionState()
+            AudioService.refreshPlayState(context)
             return mapOf("success" to true)
         }
     }
@@ -166,25 +204,15 @@ class AudioFunctions {
                     } else {
                         BitmapFactory.decodeFile(artworkSrc)
                     }
-                    bitmap?.let { metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
+                    bitmap?.let {
+                        currentArtwork = it
+                        metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
+                    }
                 } catch (_: Exception) { /* artwork is optional — ignore fetch failures */ }
             }
 
             session.setMetadata(metaBuilder.build())
-
-            val stateBuilder = PlaybackStateCompat.Builder()
-                .setActions(
-                    PlaybackStateCompat.ACTION_PLAY or
-                    PlaybackStateCompat.ACTION_PAUSE or
-                    PlaybackStateCompat.ACTION_SEEK_TO
-                )
-                .setState(
-                    if (mediaPlayer?.isPlaying == true) PlaybackStateCompat.STATE_PLAYING
-                    else PlaybackStateCompat.STATE_PAUSED,
-                    (mediaPlayer?.currentPosition ?: 0).toLong(),
-                    1.0f
-                )
-            session.setPlaybackState(stateBuilder.build())
+            updateSessionState()
 
             // Refresh the foreground service notification with the new track info
             AudioService.updateNotification(

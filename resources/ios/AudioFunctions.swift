@@ -17,6 +17,72 @@ enum AudioFunctions {
     private static var playerItem: AVPlayerItem?
     /** Observer token for the end-of-play event. */
     private static var completionObserver: Any?
+    /** Guard so MPRemoteCommandCenter handlers are only registered once per process lifetime. */
+    private static var remoteCommandsRegistered = false
+
+    // MARK: - Remote command centre
+
+    /**
+     * Registers hardware/lock-screen play, pause and toggle-play-pause commands once.
+     * Must be called after the AVAudioSession is activated so the system routes remote
+     * events to this app.
+     *
+     * On iOS the system automatically shows the registered app's now-playing info on the
+     * lock screen / Control Center, and tapping that UI brings the app to the foreground —
+     * no extra "tap to open" code is required.
+     */
+    private static func setupRemoteCommands() {
+        guard !remoteCommandsRegistered else { return }
+        remoteCommandsRegistered = true
+
+        let center = MPRemoteCommandCenter.shared()
+
+        center.playCommand.isEnabled = true
+        center.playCommand.addTarget { _ in
+            guard AudioFunctions.player != nil else { return .noSuchContent }
+            AudioFunctions.player?.play()
+            AudioFunctions.syncNowPlayingState()
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", [:])
+            return .success
+        }
+
+        center.pauseCommand.isEnabled = true
+        center.pauseCommand.addTarget { _ in
+            guard AudioFunctions.player != nil else { return .noSuchContent }
+            AudioFunctions.player?.pause()
+            AudioFunctions.syncNowPlayingState()
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [:])
+            return .success
+        }
+
+        center.togglePlayPauseCommand.isEnabled = true
+        center.togglePlayPauseCommand.addTarget { _ in
+            guard let player = AudioFunctions.player else { return .noSuchContent }
+            if player.rate > 0 {
+                player.pause()
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [:])
+            } else {
+                player.play()
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", [:])
+            }
+            AudioFunctions.syncNowPlayingState()
+            return .success
+        }
+    }
+
+    /**
+     * Writes the current AVPlayer rate and elapsed time back into MPNowPlayingInfoCenter.
+     * Call this after any play/pause state change so the lock-screen scrubber and
+     * play/pause button icon stay in sync with the actual player state.
+     */
+    static func syncNowPlayingState() {
+        guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+        let rate   = AudioFunctions.player?.rate ?? 0.0
+        let elapsed = AudioFunctions.player?.currentTime().seconds ?? 0.0
+        info[MPNowPlayingInfoPropertyPlaybackRate]      = rate
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isNaN ? 0.0 : elapsed
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
 
     /**
      * Starts playback of a remote or local audio URL.
@@ -46,6 +112,9 @@ enum AudioFunctions {
             try? session.setCategory(.playback, mode: .default)
             try? session.setActive(true)
 
+            // Register lock-screen / Bluetooth remote-control command handlers
+            AudioFunctions.setupRemoteCommands()
+
             AudioFunctions.playerItem = AVPlayerItem(url: url)
             AudioFunctions.player = AVPlayer(playerItem: AudioFunctions.playerItem)
 
@@ -72,6 +141,7 @@ enum AudioFunctions {
     class Pause: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.pause()
+            AudioFunctions.syncNowPlayingState()
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [:])
             return BridgeResponse.success(data: ["success": true])
         }
@@ -84,6 +154,7 @@ enum AudioFunctions {
     class Resume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.play()
+            AudioFunctions.syncNowPlayingState()
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", [:])
             return BridgeResponse.success(data: ["success": true])
         }
