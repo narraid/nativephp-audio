@@ -197,3 +197,22 @@ nativephp.json (Android)
     1. Native layer (Swift/Kotlin) calls POST /_native/api/events with event=Theunwindfront\Audio\Events\PlaybackStarted&payload[]=<url>
     2. NativePHP's DispatchEventFromAppController instantiates and dispatches the Laravel event
     3. Your app listens with standard Laravel event listeners or Livewire #[On('native:...')] attributes
+
+
+Done. Here's a summary of all changes:
+
+Updated events:
+- PlaybackStarted — added title, artist, album, duration (nullable)                                                                                                              - PlaybackPaused — added position, duration
+- PlaybackStopped — added position, duration
+- PlaybackCompleted — added url, duration
+
+New events:
+- PlaybackResumed — position, duration
+- PlaybackSeeked — from, to, duration
+- PlaybackFailed — url, error
+
+Bridge updated with audio-resumed, audio-seeked, audio-failed custom events.
+
+One thing to note: the native side (Swift/Kotlin) will need to be updated to pass the new payload fields when dispatching these events. The PlaybackPaused, PlaybackStopped,   
+PlaybackResumed, PlaybackSeeked, and PlaybackFailed events especially require the native layer to provide position/duration at the moment they fire.
+

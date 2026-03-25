@@ -17,5 +17,17 @@
         if (name === 'Theunwindfront\\Audio\\Events\\PlaybackCompleted') {
             window.dispatchEvent(new CustomEvent('audio-completed', { detail: payload }));
         }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\PlaybackResumed') {
+            window.dispatchEvent(new CustomEvent('audio-resumed', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\PlaybackSeeked') {
+            window.dispatchEvent(new CustomEvent('audio-seeked', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\PlaybackFailed') {
+            window.dispatchEvent(new CustomEvent('audio-failed', { detail: payload }));
+        }
     });
 </script>

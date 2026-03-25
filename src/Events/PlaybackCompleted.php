@@ -9,7 +9,9 @@ class PlaybackCompleted
 {
     use Dispatchable, SerializesModels;
 
-    public function __construct()
-    {
+    public function __construct(
+        public string $url,
+        public float $duration,
+    ) {
     }
 }

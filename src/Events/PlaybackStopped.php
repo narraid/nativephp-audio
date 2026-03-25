@@ -9,7 +9,9 @@ class PlaybackStopped
 {
     use Dispatchable, SerializesModels;
 
-    public function __construct()
-    {
+    public function __construct(
+        public float $position,
+        public float $duration,
+    ) {
     }
 }
