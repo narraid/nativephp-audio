@@ -185,4 +185,15 @@ Android AudioFunctions.kt
 nativephp.json (Android)
 - Added FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PLAYBACK (Android 14+), and WAKE_LOCK permissions
 - Registered AudioService under services with foreground_service_type: mediaPlayback
-- Added androidx.core:core-ktx:1.13.1 dependency (for NotificationCompat)                             
+- Added androidx.core:core-ktx:1.13.1 dependency (for NotificationCompat)
+
+  New event — PlaybackProgressUpdated
+    - Fired by the native layer at a configurable interval during playback
+    - Carries $position (current seconds) and $duration (total seconds)
+    - Auto-discovered by NativePHP Mobile's PluginRegistry via the nativephp.json events array
+    - Dispatched via POST /_native/api/events just like the other events
+
+  How the events flow:
+    1. Native layer (Swift/Kotlin) calls POST /_native/api/events with event=Theunwindfront\Audio\Events\PlaybackStarted&payload[]=<url>
+    2. NativePHP's DispatchEventFromAppController instantiates and dispatches the Laravel event
+    3. Your app listens with standard Laravel event listeners or Livewire #[On('native:...')] attributes
