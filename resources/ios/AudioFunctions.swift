@@ -60,10 +60,12 @@ enum AudioFunctions {
             guard AudioFunctions.player != nil else { return .noSuchContent }
             AudioFunctions.player?.play()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", [
+            let payload: [String: Any] = [
                 "position": AudioFunctions.positionSeconds(),
                 "duration": AudioFunctions.durationSeconds()
-            ])
+            ]
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
             return .success
         }
 
@@ -72,30 +74,75 @@ enum AudioFunctions {
             guard AudioFunctions.player != nil else { return .noSuchContent }
             AudioFunctions.player?.pause()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [
+            let payload: [String: Any] = [
                 "position": AudioFunctions.positionSeconds(),
                 "duration": AudioFunctions.durationSeconds()
-            ])
+            ]
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
             return .success
         }
 
         center.togglePlayPauseCommand.isEnabled = true
         center.togglePlayPauseCommand.addTarget { _ in
             guard let player = AudioFunctions.player else { return .noSuchContent }
+            let payload: [String: Any] = [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ]
             if player.rate > 0 {
                 player.pause()
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [
-                    "position": AudioFunctions.positionSeconds(),
-                    "duration": AudioFunctions.durationSeconds()
-                ])
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
             } else {
                 player.play()
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", [
-                    "position": AudioFunctions.positionSeconds(),
-                    "duration": AudioFunctions.durationSeconds()
-                ])
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
             }
             AudioFunctions.syncNowPlayingState()
+            return .success
+        }
+
+        center.nextTrackCommand.isEnabled = true
+        center.nextTrackCommand.addTarget { _ in
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived", [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ])
+            return .success
+        }
+
+        center.previousTrackCommand.isEnabled = true
+        center.previousTrackCommand.addTarget { _ in
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived", [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ])
+            return .success
+        }
+
+        center.stopCommand.isEnabled = true
+        center.stopCommand.addTarget { _ in
+            guard AudioFunctions.player != nil else { return .noSuchContent }
+            let payload: [String: Any] = [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ]
+            AudioFunctions.player?.pause()
+            AudioFunctions.player = nil
+            AudioFunctions.playerItem = nil
+            if let observer = AudioFunctions.completionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                AudioFunctions.completionObserver = nil
+            }
+            if let observer = AudioFunctions.failureObserver {
+                NotificationCenter.default.removeObserver(observer)
+                AudioFunctions.failureObserver = nil
+            }
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", payload)
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteStopReceived", payload)
             return .success
         }
     }

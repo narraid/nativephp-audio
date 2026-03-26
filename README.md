@@ -256,4 +256,33 @@ Android (AudioFunctions.kt)
 
 nativephp.json
 
-Added PlaybackResumed, PlaybackSeeked, and PlaybackFailed to the events array for PluginRegistry auto-discovery.        
+Added PlaybackResumed, PlaybackSeeked, and PlaybackFailed to the events array for PluginRegistry auto-discovery.
+
+
+Everything looks correct. Here's a summary of all the changes made:
+                                                                                                                                                                                                                          
+---                                                                                                                                                                                                                   
+5 new PHP events (src/Events/):
+- RemotePlayReceived — fires when play is triggered from a remote device/headphone
+- RemotePauseReceived — fires when pause is triggered remotely
+- RemoteNextTrackReceived — fires when next track is pressed; app handles loading the new track
+- RemotePreviousTrackReceived — fires when previous is pressed; includes position so app can decide to restart or go back
+- RemoteStopReceived — fires when stop is triggered remotely (also fires PlaybackStopped)
+
+All carry position and duration as context.
+
+iOS (AudioFunctions.swift):
+- Added nextTrackCommand, previousTrackCommand, and stopCommand handlers in setupRemoteCommands()
+- play/pause/togglePlayPause now also fire RemotePlayReceived/RemotePauseReceived alongside the existing PlaybackResumed/PlaybackPaused
+
+Android (AudioFunctions.kt):
+- getOrCreateSession() now sets a MediaSessionCompat.Callback with onPlay, onPause, onSkipToNext, onSkipToPrevious, onStop — handles headphone buttons and Bluetooth commands
+- updateSessionState() now advertises ACTION_SKIP_TO_NEXT, ACTION_SKIP_TO_PREVIOUS, and ACTION_STOP so controls appear on lock screen and BT devices
+
+Android (AudioService.kt):
+- Added ACTION_NEXT and ACTION_PREVIOUS constants
+- Notification now shows [⏮ Previous] [⏯ Play/Pause] [⏭ Next] buttons; compact view shows the play/pause button
+- onStartCommand handles the new actions by routing through MediaSession.transportControls
+
+Bridge (bridge.blade.php + nativephp.json):
+- 5 new JS custom events: audio-remote-play, audio-remote-pause, audio-remote-next, audio-remote-previous, audio-remote-stop         

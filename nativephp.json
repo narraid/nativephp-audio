@@ -111,7 +111,12 @@
         "Theunwindfront\\Audio\\Events\\PlaybackCompleted",
         "Theunwindfront\\Audio\\Events\\PlaybackSeeked",
         "Theunwindfront\\Audio\\Events\\PlaybackFailed",
-        "Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated"
+        "Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated",
+        "Theunwindfront\\Audio\\Events\\RemotePlayReceived",
+        "Theunwindfront\\Audio\\Events\\RemotePauseReceived",
+        "Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived",
+        "Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived",
+        "Theunwindfront\\Audio\\Events\\RemoteStopReceived"
     ],
 
     "hooks": {}

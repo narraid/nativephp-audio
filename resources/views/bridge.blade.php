@@ -29,5 +29,25 @@
         if (name === 'Theunwindfront\\Audio\\Events\\PlaybackFailed') {
             window.dispatchEvent(new CustomEvent('audio-failed', { detail: payload }));
         }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\RemotePlayReceived') {
+            window.dispatchEvent(new CustomEvent('audio-remote-play', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\RemotePauseReceived') {
+            window.dispatchEvent(new CustomEvent('audio-remote-pause', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived') {
+            window.dispatchEvent(new CustomEvent('audio-remote-next', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived') {
+            window.dispatchEvent(new CustomEvent('audio-remote-previous', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\RemoteStopReceived') {
+            window.dispatchEvent(new CustomEvent('audio-remote-stop', { detail: payload }));
+        }
     });
 </script>

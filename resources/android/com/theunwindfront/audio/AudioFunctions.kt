@@ -43,9 +43,54 @@ class AudioFunctions {
         }
 
         fun getOrCreateSession(context: Context): MediaSessionCompat {
-            return mediaSession ?: MediaSessionCompat(context, "NativePHPAudio").also {
-                it.isActive = true
-                mediaSession = it
+            return mediaSession ?: MediaSessionCompat(context, "NativePHPAudio").also { session ->
+                session.isActive = true
+                session.setCallback(object : MediaSessionCompat.Callback() {
+                    override fun onPlay() {
+                        mediaPlayer?.start()
+                        updateSessionState()
+                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
+                        sendEvent("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
+                    }
+
+                    override fun onPause() {
+                        mediaPlayer?.pause()
+                        updateSessionState()
+                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+                        sendEvent("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
+                    }
+
+                    override fun onSkipToNext() {
+                        sendEvent("Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived", mapOf(
+                            "position" to positionSeconds(),
+                            "duration" to durationSeconds()
+                        ))
+                    }
+
+                    override fun onSkipToPrevious() {
+                        sendEvent("Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived", mapOf(
+                            "position" to positionSeconds(),
+                            "duration" to durationSeconds()
+                        ))
+                    }
+
+                    override fun onStop() {
+                        val position = positionSeconds()
+                        val duration = durationSeconds()
+                        mediaPlayer?.stop()
+                        mediaPlayer?.release()
+                        mediaPlayer = null
+                        activityRef?.get()?.let { AudioService.stop(it) }
+                        val payload = mapOf("position" to position, "duration" to duration)
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStopped", payload)
+                        sendEvent("Theunwindfront\\Audio\\Events\\RemoteStopReceived", payload)
+                    }
+                })
+                mediaSession = session
             }
         }
 
@@ -99,7 +144,10 @@ class AudioFunctions {
                 .setActions(
                     PlaybackStateCompat.ACTION_PLAY or
                     PlaybackStateCompat.ACTION_PAUSE or
-                    PlaybackStateCompat.ACTION_SEEK_TO
+                    PlaybackStateCompat.ACTION_SEEK_TO or
+                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                    PlaybackStateCompat.ACTION_STOP
                 )
                 .setState(
                     if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,

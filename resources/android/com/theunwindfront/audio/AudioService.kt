@@ -41,6 +41,14 @@ class AudioService : Service() {
                 AudioFunctions.togglePlayPause()
                 refreshNotification()
             }
+            ACTION_NEXT -> {
+                AudioFunctions.getOrCreateSession(this).controller?.transportControls?.skipToNext()
+                refreshNotification()
+            }
+            ACTION_PREVIOUS -> {
+                AudioFunctions.getOrCreateSession(this).controller?.transportControls?.skipToPrevious()
+                refreshNotification()
+            }
             ACTION_REFRESH_STATE -> {
                 // Called after Pause/Resume from PHP side — just rebuild the notification
                 refreshNotification()
@@ -87,6 +95,13 @@ class AudioService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // --- Previous action button ---
+        val prevIntent = Intent(this, AudioService::class.java).apply { action = ACTION_PREVIOUS }
+        val prevPendingIntent = PendingIntent.getService(
+            this, 2, prevIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         // --- Play/pause action button ---
         val toggleIntent = Intent(this, AudioService::class.java).apply {
             action = ACTION_TOGGLE_PLAY_PAUSE
@@ -99,11 +114,18 @@ class AudioService : Service() {
                              else android.R.drawable.ic_media_play
         val playPauseLabel = if (isPlaying) "Pause" else "Play"
 
+        // --- Next action button ---
+        val nextIntent = Intent(this, AudioService::class.java).apply { action = ACTION_NEXT }
+        val nextPendingIntent = PendingIntent.getService(
+            this, 3, nextIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         // --- MediaStyle with session token (enables lock-screen transport controls) ---
         val sessionToken = AudioFunctions.getSessionToken(this)
         val style = MediaStyle()
             .setMediaSession(sessionToken)
-            .setShowActionsInCompactView(0) // show play/pause in compact view
+            .setShowActionsInCompactView(1) // show play/pause in compact view (index 1 = middle button)
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
@@ -113,7 +135,9 @@ class AudioService : Service() {
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setStyle(style)
+            .addAction(android.R.drawable.ic_media_previous, "Previous", prevPendingIntent)
             .addAction(playPauseIcon, playPauseLabel, togglePendingIntent)
+            .addAction(android.R.drawable.ic_media_next, "Next", nextPendingIntent)
 
         if (!currentArtist.isNullOrEmpty()) {
             builder.setContentText(currentArtist)
@@ -139,6 +163,8 @@ class AudioService : Service() {
         const val EXTRA_TITLE  = "title"
         const val EXTRA_ARTIST = "artist"
         const val ACTION_TOGGLE_PLAY_PAUSE = "com.theunwindfront.audio.ACTION_TOGGLE_PLAY_PAUSE"
+        const val ACTION_NEXT              = "com.theunwindfront.audio.ACTION_NEXT"
+        const val ACTION_PREVIOUS          = "com.theunwindfront.audio.ACTION_PREVIOUS"
         const val ACTION_REFRESH_STATE     = "com.theunwindfront.audio.ACTION_REFRESH_STATE"
 
         /** Last-known track title for notification rebuilds triggered by the toggle button. */
