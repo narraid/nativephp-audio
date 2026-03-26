@@ -154,6 +154,27 @@ enum AudioFunctions {
             return .success
         }
 
+        center.changePlaybackPositionCommand.isEnabled = true
+        center.changePlaybackPositionCommand.addTarget { event in
+            guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+                return .commandFailed
+            }
+            let seekTo = positionEvent.positionTime
+            let from = AudioFunctions.positionSeconds()
+            let duration = AudioFunctions.durationSeconds()
+            let time = CMTime(seconds: seekTo, preferredTimescale: 1000)
+            AudioFunctions.player?.seek(to: time) { _ in
+                AudioFunctions.syncNowPlayingState()
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteSeekReceived", [
+                    "position": from,
+                    "duration": duration,
+                    "url": AudioFunctions.currentURL,
+                    "seekTo": seekTo
+                ])
+            }
+            return .success
+        }
+
         center.stopCommand.isEnabled = true
         center.stopCommand.addTarget { _ in
             guard AudioFunctions.player != nil else { return .noSuchContent }

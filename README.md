@@ -332,3 +332,35 @@ Android — two bugs fixed
 
 Behavioural change to note: PlaybackStarted now fires slightly later on Android — after buffering completes rather than immediately when play() is called. This is correct: it now fires when audio actually begins     
 playing, which is consistent with iOS behaviour and makes sense for HLS since there's a buffering window before sound starts.
+
+
+New file: src/Events/RemoteSeekReceived.php                                                                                                                                                                             
+PHP event with url, position, duration, and seekTo fields.
+
+nativephp.json
+Registered RemoteSeekReceived in the events list.
+
+resources/views/bridge.blade.php
+Maps the PHP event to the JS custom event audio-remote-seek.
+
+resources/ios/AudioFunctions.swift                                                                                                                                                                                      
+Registered changePlaybackPositionCommand handler — seeks the player then dispatches RemoteSeekReceived.
+
+resources/android/com/theunwindfront/audio/AudioFunctions.kt                                                                                                                                                          
+Added onSeekTo() override in the MediaSessionCompat.Callback — seeks the player and dispatches RemoteSeekReceived.
+                                                                                                                                                                                                                          
+---
+How to use it in your app
+
+JavaScript:
+window.addEventListener('audio-remote-seek', (e) => {                                                                                                                                                                   
+// e.detail.seekTo — where the user dragged to (seconds)                                                                                                                                                          
+// e.detail.position — where playback was before seek                                                                                                                                                               
+// e.detail.url — current track                                                                                                                                                                                     
+});
+
+Livewire:                                                                                                                                                                                                               
+#[On('native:Theunwindfront\\Audio\\Events\\RemoteSeekReceived')]                                                                                                                                                     
+public function handleRemoteSeek($url, $position, $duration, $seekTo) {                                                                                                                                                 
+// update your UI position state                                   
+}                                                                              

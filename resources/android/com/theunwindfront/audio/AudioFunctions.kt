@@ -216,6 +216,19 @@ class AudioFunctions {
                         ))
                     }
 
+                    override fun onSeekTo(pos: Long) {
+                        val from = positionSeconds()
+                        val seekTo = pos / 1000.0
+                        mediaPlayer?.seekTo(pos.toInt())
+                        updateSessionState()
+                        sendEvent("Theunwindfront\\Audio\\Events\\RemoteSeekReceived", mapOf(
+                            "position" to from,
+                            "duration" to durationSeconds(),
+                            "url" to currentUrl,
+                            "seekTo" to seekTo
+                        ))
+                    }
+
                     override fun onStop() {
                         val position = positionSeconds()
                         val duration = durationSeconds()

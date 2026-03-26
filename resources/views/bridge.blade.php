@@ -46,6 +46,10 @@
             window.dispatchEvent(new CustomEvent('audio-remote-previous', { detail: payload }));
         }
 
+        if (name === 'Theunwindfront\\Audio\\Events\\RemoteSeekReceived') {
+            window.dispatchEvent(new CustomEvent('audio-remote-seek', { detail: payload }));
+        }
+
         if (name === 'Theunwindfront\\Audio\\Events\\RemoteStopReceived') {
             window.dispatchEvent(new CustomEvent('audio-remote-stop', { detail: payload }));
         }
