@@ -373,7 +373,15 @@ class AudioFunctions {
                     setOnPreparedListener { mp ->
                         requestAudioFocus(activity)
                         mp.start()
-                        AudioService.start(activity, title ?: "Now Playing", artist)
+                        // If no title was passed to play(), preserve whatever setMetadata()
+                        // may have already set (it runs before onPreparedListener fires because
+                        // prepareAsync() returns immediately). Falling back to "Now Playing"
+                        // only when neither source has provided a real title.
+                        val serviceTitle = title
+                            ?: AudioService.currentTitle.takeIf { it != "Now Playing" }
+                            ?: "Now Playing"
+                        val serviceArtist = artist ?: AudioService.currentArtist
+                        AudioService.start(activity, serviceTitle, serviceArtist)
                         val payload = mutableMapOf<String, Any>("url" to url)
                         title?.let   { payload["title"] = it }
                         artist?.let  { payload["artist"] = it }

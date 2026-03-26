@@ -588,17 +588,9 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "title is required.")
             }
 
-            // Configure and activate the audio session with the playback category BEFORE
-            // writing to MPNowPlayingInfoCenter. Without an active .playback session the OS
-            // will not display the now-playing widget on the first call.
-            let audioSession = AVAudioSession.sharedInstance()
-            try? audioSession.setCategory(.playback, mode: .default)
-            try? audioSession.setActive(true)
-
-            // Register remote command handlers so the lock screen / Control Center
-            // widget appears immediately, even when called before play().
-            AudioFunctions.setupRemoteCommands()
-
+            // Build the info dictionary on the current (PHP worker) thread.
+            // Artwork loading may involve a blocking network call so we keep it here
+            // rather than on the main thread.
             var info: [String: Any] = [:]
             info[MPMediaItemPropertyTitle] = title
 
@@ -612,13 +604,12 @@ enum AudioFunctions {
                 info[MPMediaItemPropertyPlaybackDuration] = duration
             }
 
-            // Preserve elapsed time so the scrubber stays accurate
+            // Snapshot player state before crossing to the main thread.
             let elapsed = AudioFunctions.player?.currentTime().seconds ?? 0.0
             info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isNaN ? 0.0 : elapsed
             info[MPNowPlayingInfoPropertyPlaybackRate] = AudioFunctions.player?.rate ?? 0.0
 
             if let artworkString = parameters["artwork"] as? String {
-                // Try local file path first, then remote URL
                 if let image = UIImage(contentsOfFile: artworkString) {
                     info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                 } else if let url = URL(string: artworkString),
@@ -628,7 +619,20 @@ enum AudioFunctions {
                 }
             }
 
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            // Apple requires MPNowPlayingInfoCenter and AVAudioSession updates to happen
+            // on the main thread. NativePHPCall is invoked from the PHP worker thread, so
+            // dispatch to main. Without this the OS silently ignores the update on the
+            // first call (no audio engine refresh is running yet to flush the write).
+            let infoToSet = info
+            DispatchQueue.main.async {
+                let session = AVAudioSession.sharedInstance()
+                try? session.setCategory(.playback, mode: .default)
+                try? session.setActive(true)
+                // Register lock-screen / Control Center handlers so the widget appears
+                // immediately, even when setMetadata() is called before play().
+                AudioFunctions.setupRemoteCommands()
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = infoToSet
+            }
 
             return BridgeResponse.success(data: ["success": true])
         }
