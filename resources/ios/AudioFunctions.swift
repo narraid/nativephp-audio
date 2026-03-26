@@ -29,6 +29,27 @@ enum AudioFunctions {
     private static var routeChangeObserver: Any?
     /** True when we paused due to an audio-focus interruption so we can auto-resume. */
     private static var pausedByFocusLoss = false
+    /** Periodic time observer token for PlaybackProgressUpdated events. */
+    private static var progressObserver: Any?
+
+    static func startProgressTimer(interval: Double) {
+        stopProgressTimer()
+        guard interval > 0, let p = player else { return }
+        let cmInterval = CMTime(seconds: interval, preferredTimescale: 600)
+        progressObserver = p.addPeriodicTimeObserver(forInterval: cmInterval, queue: .main) { _ in
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated", [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ])
+        }
+    }
+
+    static func stopProgressTimer() {
+        if let observer = progressObserver {
+            player?.removeTimeObserver(observer)
+            progressObserver = nil
+        }
+    }
 
     // MARK: - Position / duration helpers
 
@@ -134,6 +155,7 @@ enum AudioFunctions {
                 "position": AudioFunctions.positionSeconds(),
                 "duration": AudioFunctions.durationSeconds()
             ]
+            AudioFunctions.stopProgressTimer()
             AudioFunctions.player?.pause()
             AudioFunctions.player = nil
             AudioFunctions.playerItem = nil
@@ -369,6 +391,7 @@ enum AudioFunctions {
             let position = AudioFunctions.positionSeconds()
             let duration = AudioFunctions.durationSeconds()
 
+            AudioFunctions.stopProgressTimer()
             AudioFunctions.player?.pause()
             AudioFunctions.player = nil
             AudioFunctions.playerItem = nil
@@ -448,6 +471,21 @@ enum AudioFunctions {
             // nan represents duration not being available/loaded yet
             let validDuration = duration.isNaN ? 0.0 : duration
             return BridgeResponse.success(data: ["duration": validDuration])
+        }
+    }
+
+    /**
+     * Sets the interval at which PlaybackProgressUpdated events are fired.
+     * Pass 0 to disable progress events.
+     *
+     * Expected parameters:
+     *  - `seconds` (Number, optional, default 0) – interval in seconds (0 = disabled).
+     */
+    class SetProgressInterval: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let seconds = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
+            AudioFunctions.startProgressTimer(interval: seconds)
+            return BridgeResponse.success(data: ["success": true])
         }
     }
 

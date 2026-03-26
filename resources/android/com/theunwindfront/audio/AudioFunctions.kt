@@ -44,6 +44,36 @@ class AudioFunctions {
         /** True when we paused due to transient focus loss so we can auto-resume. */
         private var pausedByFocusLoss = false
 
+        // ── Progress timer ───────────────────────────────────────────────────────
+        private var progressHandler: Handler? = null
+        private var progressRunnable: Runnable? = null
+
+        fun startProgressTimer(intervalMs: Long) {
+            stopProgressTimer()
+            if (intervalMs <= 0) return
+            val handler = Handler(Looper.getMainLooper())
+            progressHandler = handler
+            val runnable = object : Runnable {
+                override fun run() {
+                    if (mediaPlayer?.isPlaying == true) {
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated", mapOf(
+                            "position" to positionSeconds(),
+                            "duration" to durationSeconds()
+                        ))
+                    }
+                    handler.postDelayed(this, intervalMs)
+                }
+            }
+            progressRunnable = runnable
+            handler.postDelayed(runnable, intervalMs)
+        }
+
+        fun stopProgressTimer() {
+            progressRunnable?.let { progressHandler?.removeCallbacks(it) }
+            progressHandler = null
+            progressRunnable = null
+        }
+
         private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
             when (focusChange) {
                 AudioManager.AUDIOFOCUS_LOSS -> {
@@ -183,6 +213,7 @@ class AudioFunctions {
                     override fun onStop() {
                         val position = positionSeconds()
                         val duration = durationSeconds()
+                        stopProgressTimer()
                         mediaPlayer?.stop()
                         mediaPlayer?.release()
                         mediaPlayer = null
@@ -358,6 +389,7 @@ class AudioFunctions {
             // Capture state before releasing the player
             val position = positionSeconds()
             val duration = durationSeconds()
+            stopProgressTimer()
             mediaPlayer?.stop()
             mediaPlayer?.release()
             mediaPlayer = null
@@ -401,6 +433,15 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             val duration = mediaPlayer?.duration ?: 0
             return mapOf("duration" to duration / 1000.0)
+        }
+    }
+
+    class SetProgressInterval(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val params = JSONObject(parameters)
+            val seconds = params.optDouble("seconds", 0.0)
+            startProgressTimer((seconds * 1000).toLong())
+            return mapOf("success" to true)
         }
     }
 
