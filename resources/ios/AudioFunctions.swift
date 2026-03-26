@@ -23,6 +23,12 @@ enum AudioFunctions {
     private static var remoteCommandsRegistered = false
     /** URL of the currently loaded track — used in remote-command events. */
     private static var currentURL: String = ""
+    /** Observer token for AVAudioSession interruption events (calls, Siri, other apps). */
+    private static var interruptionObserver: Any?
+    /** Observer token for audio route changes (headphones unplugged). */
+    private static var routeChangeObserver: Any?
+    /** True when we paused due to an audio-focus interruption so we can auto-resume. */
+    private static var pausedByFocusLoss = false
 
     // MARK: - Position / duration helpers
 
@@ -131,19 +137,103 @@ enum AudioFunctions {
             AudioFunctions.player?.pause()
             AudioFunctions.player = nil
             AudioFunctions.playerItem = nil
-            if let observer = AudioFunctions.completionObserver {
-                NotificationCenter.default.removeObserver(observer)
-                AudioFunctions.completionObserver = nil
+            for observer in [AudioFunctions.completionObserver, AudioFunctions.failureObserver,
+                             AudioFunctions.interruptionObserver, AudioFunctions.routeChangeObserver] {
+                if let o = observer { NotificationCenter.default.removeObserver(o) }
             }
-            if let observer = AudioFunctions.failureObserver {
-                NotificationCenter.default.removeObserver(observer)
-                AudioFunctions.failureObserver = nil
-            }
+            AudioFunctions.completionObserver = nil
+            AudioFunctions.failureObserver = nil
+            AudioFunctions.interruptionObserver = nil
+            AudioFunctions.routeChangeObserver = nil
+            AudioFunctions.pausedByFocusLoss = false
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", payload)
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteStopReceived", payload)
             return .success
+        }
+    }
+
+    // MARK: - Audio session observers (interruptions + route changes)
+
+    /**
+     * Registers AVAudioSession observers for interruptions (phone calls, Siri, other apps stealing
+     * focus) and route changes (headphones unplugged). Safe to call multiple times — registers once.
+     *
+     * Interruption began  → auto-pause + fire AudioFocusLostTransient + PlaybackPaused.
+     * Interruption ended  → fire AudioFocusGained; auto-resume when .shouldResume is set.
+     * Headphones unplugged → pause + fire AudioFocusLostTransient + PlaybackPaused.
+     */
+    private static func setupAudioSessionObservers() {
+        guard interruptionObserver == nil else { return }
+
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+            switch type {
+            case .began:
+                guard AudioFunctions.player != nil else { return }
+                if AudioFunctions.player?.rate ?? 0 > 0 {
+                    AudioFunctions.pausedByFocusLoss = true
+                    AudioFunctions.player?.pause()
+                    AudioFunctions.syncNowPlayingState()
+                    let payload: [String: Any] = [
+                        "position": AudioFunctions.positionSeconds(),
+                        "duration": AudioFunctions.durationSeconds()
+                    ]
+                    LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+                    LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
+                }
+
+            case .ended:
+                let optionsValue = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                let payload: [String: Any] = [
+                    "position": AudioFunctions.positionSeconds(),
+                    "duration": AudioFunctions.durationSeconds()
+                ]
+                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusGained", payload)
+
+                if options.contains(.shouldResume) && AudioFunctions.pausedByFocusLoss {
+                    AudioFunctions.pausedByFocusLoss = false
+                    try? AVAudioSession.sharedInstance().setActive(true)
+                    AudioFunctions.player?.play()
+                    AudioFunctions.syncNowPlayingState()
+                    LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
+                } else {
+                    AudioFunctions.pausedByFocusLoss = false
+                }
+
+            @unknown default:
+                break
+            }
+        }
+
+        // Headphones unplugged — pause to prevent unexpected speaker playback
+        routeChangeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue),
+                  reason == .oldDeviceUnavailable,
+                  AudioFunctions.player != nil,
+                  AudioFunctions.player?.rate ?? 0 > 0 else { return }
+
+            AudioFunctions.player?.pause()
+            AudioFunctions.syncNowPlayingState()
+            let payload: [String: Any] = [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds()
+            ]
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
         }
     }
 
@@ -195,6 +285,9 @@ enum AudioFunctions {
 
             // Register lock-screen / Bluetooth remote-control command handlers
             AudioFunctions.setupRemoteCommands()
+
+            // Register audio session observers for interruptions and route changes
+            AudioFunctions.setupAudioSessionObservers()
 
             AudioFunctions.currentURL = urlString
             AudioFunctions.playerItem = AVPlayerItem(url: url)
@@ -287,6 +380,15 @@ enum AudioFunctions {
                 NotificationCenter.default.removeObserver(observer)
                 AudioFunctions.failureObserver = nil
             }
+            if let observer = AudioFunctions.interruptionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                AudioFunctions.interruptionObserver = nil
+            }
+            if let observer = AudioFunctions.routeChangeObserver {
+                NotificationCenter.default.removeObserver(observer)
+                AudioFunctions.routeChangeObserver = nil
+            }
+            AudioFunctions.pausedByFocusLoss = false
             // Deactivate the session so other apps can resume their audio
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil

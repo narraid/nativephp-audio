@@ -286,3 +286,27 @@ Android (AudioService.kt):
 
 Bridge (bridge.blade.php + nativephp.json):
 - 5 new JS custom events: audio-remote-play, audio-remote-pause, audio-remote-next, audio-remote-previous, audio-remote-stop         
+
+---                                                                                                                                                                                                                   
+4 new PHP events (src/Events/):
+- AudioFocusLost — permanent loss; playback is paused, no auto-resume (another app took over music)
+- AudioFocusLostTransient — temporary loss (incoming call, Siri, notification); playback auto-pauses
+- AudioFocusDucked — another app requested ducking; volume lowered to 20% (Android only — iOS handles ducking at the OS level without notifying the app)
+- AudioFocusGained — focus returned; volume restored, playback auto-resumes if it was paused by a transient loss
+
+All carry position and duration.
+
+Android (AudioFunctions.kt):
+- AudioManager.OnAudioFocusChangeListener handles all 4 focus states
+- requestAudioFocus() called at start of Play — uses AudioFocusRequest (API 26+) or the legacy API
+- abandonAudioFocus() called in Stop and the MediaSession onStop() callback
+- SetVolume now tracks userVolume so the correct level is restored after ducking
+
+iOS (AudioFunctions.swift):
+- setupAudioSessionObservers() registers:
+  - AVAudioSession.interruptionNotification — handles calls/Siri (began → pause, ended → auto-resume when shouldResume is set)
+  - AVAudioSession.routeChangeNotification — pauses when headphones are unplugged (.oldDeviceUnavailable)
+- Called once from Play.execute() alongside setupRemoteCommands()
+- Observers cleaned up in both Stop.execute() and the remote stop command handler
+
+Bridge (bridge.blade.php): audio-focus-lost, audio-focus-lost-transient, audio-focus-ducked, audio-focus-gained custom events                        

@@ -4,8 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.support.v4.media.MediaMetadataCompat
@@ -31,6 +34,105 @@ class AudioFunctions {
 
         /** Weak reference to the host activity, set on first Play call. */
         private var activityRef: WeakReference<FragmentActivity>? = null
+
+        // ── Audio focus ──────────────────────────────────────────────────────────
+        private const val DUCK_FACTOR = 0.2f
+        private var audioManager: AudioManager? = null
+        private var audioFocusRequest: AudioFocusRequest? = null
+        /** Volume last set by the PHP side — restored after ducking. */
+        internal var userVolume: Float = 1.0f
+        /** True when we paused due to transient focus loss so we can auto-resume. */
+        private var pausedByFocusLoss = false
+
+        private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+            when (focusChange) {
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    // Permanent loss — another app took over media playback.
+                    pausedByFocusLoss = false  // no auto-resume after permanent loss
+                    if (mediaPlayer?.isPlaying == true) {
+                        mediaPlayer?.pause()
+                        updateSessionState()
+                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+                        sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusLost", payload)
+                    }
+                }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                    // Transient loss — incoming call, Siri, etc.
+                    if (mediaPlayer?.isPlaying == true) {
+                        pausedByFocusLoss = true
+                        mediaPlayer?.pause()
+                        updateSessionState()
+                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+                        sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
+                    }
+                }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    // Duck — lower volume while a notification or assistant speaks.
+                    mediaPlayer?.setVolume(userVolume * DUCK_FACTOR, userVolume * DUCK_FACTOR)
+                    sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusDucked", mapOf(
+                        "position" to positionSeconds(),
+                        "duration" to durationSeconds()
+                    ))
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    // Focus returned — restore volume and optionally resume.
+                    mediaPlayer?.setVolume(userVolume, userVolume)
+                    if (pausedByFocusLoss && mediaPlayer != null) {
+                        pausedByFocusLoss = false
+                        mediaPlayer?.start()
+                        updateSessionState()
+                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", mapOf(
+                            "position" to positionSeconds(),
+                            "duration" to durationSeconds()
+                        ))
+                    }
+                    sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusGained", mapOf(
+                        "position" to positionSeconds(),
+                        "duration" to durationSeconds()
+                    ))
+                }
+            }
+        }
+
+        fun requestAudioFocus(context: Context) {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager = am
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setWillPauseWhenDucked(false)  // we handle ducking manually
+                    .setOnAudioFocusChangeListener(audioFocusListener)
+                    .build()
+                audioFocusRequest = request
+                am.requestAudioFocus(request)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(audioFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+            }
+        }
+
+        fun abandonAudioFocus() {
+            val am = audioManager ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(audioFocusListener)
+            }
+            audioManager = null
+            audioFocusRequest = null
+            pausedByFocusLoss = false
+        }
 
         private fun JSONObject.toMap(): Map<String, Any> {
             val map = mutableMapOf<String, Any>()
@@ -84,6 +186,7 @@ class AudioFunctions {
                         mediaPlayer?.stop()
                         mediaPlayer?.release()
                         mediaPlayer = null
+                        abandonAudioFocus()
                         activityRef?.get()?.let { AudioService.stop(it) }
                         val payload = mapOf("position" to position, "duration" to duration)
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStopped", payload)
@@ -199,6 +302,9 @@ class AudioFunctions {
                         false
                     }
 
+                    // Request audio focus before starting playback
+                    requestAudioFocus(activity)
+
                     start()
                 }
 
@@ -255,6 +361,7 @@ class AudioFunctions {
             mediaPlayer?.stop()
             mediaPlayer?.release()
             mediaPlayer = null
+            abandonAudioFocus()
             AudioService.stop(context)
             sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStopped", mapOf(
                 "position" to position,
@@ -284,6 +391,7 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             val params = JSONObject(parameters)
             val level = params.optDouble("level", 1.0).toFloat()
+            userVolume = level
             mediaPlayer?.setVolume(level, level)
             return mapOf("success" to true)
         }

@@ -49,5 +49,21 @@
         if (name === 'Theunwindfront\\Audio\\Events\\RemoteStopReceived') {
             window.dispatchEvent(new CustomEvent('audio-remote-stop', { detail: payload }));
         }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\AudioFocusLost') {
+            window.dispatchEvent(new CustomEvent('audio-focus-lost', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\AudioFocusLostTransient') {
+            window.dispatchEvent(new CustomEvent('audio-focus-lost-transient', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\AudioFocusDucked') {
+            window.dispatchEvent(new CustomEvent('audio-focus-ducked', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\AudioFocusGained') {
+            window.dispatchEvent(new CustomEvent('audio-focus-gained', { detail: payload }));
+        }
     });
 </script>
