@@ -309,4 +309,26 @@ iOS (AudioFunctions.swift):
 - Called once from Play.execute() alongside setupRemoteCommands()
 - Observers cleaned up in both Stop.execute() and the remote stop command handler
 
-Bridge (bridge.blade.php): audio-focus-lost, audio-focus-lost-transient, audio-focus-ducked, audio-focus-gained custom events                        
+Bridge (bridge.blade.php): audio-focus-lost, audio-focus-lost-transient, audio-focus-ducked, audio-focus-gained custom events
+
+HLS compatibility audit
+
+iOS — was already correct
+- AVPlayer + AVPlayerItem(url:) supports HLS (.m3u8) natively and out of the box
+- Playback is inherently asynchronous — no blocking calls
+- durationSeconds() was NaN-guarded; added isInfinite guard too (some HLS implementations return CMTime.positiveInfinity for duration instead of CMTime.indefinite)
+
+Android — two bugs fixed
+
+┌───────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────────┐    
+│                   │                                                            Before                                                            │                             After                             │    
+├───────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤  
+│ Prepare for       │ prepare() — blocks the thread while fetching the .m3u8 playlist and buffering the first segment. Android docs explicitly     │ prepareAsync() — returns immediately; onPreparedListener      │
+│ streams           │ warn against this for streams.                                                                                               │ fires when ready                                              │
+├───────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤    
+│ Live stream       │ durationSeconds() returned -0.001 because MediaPlayer.getDuration() returns -1 for live/indefinite HLS                       │ Returns 0.0 for any negative duration value                   │
+│ duration          │                                                                                                                              │                                                               │    
+└───────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────────┘
+
+Behavioural change to note: PlaybackStarted now fires slightly later on Android — after buffering completes rather than immediately when play() is called. This is correct: it now fires when audio actually begins     
+playing, which is consistent with iOS behaviour and makes sense for HLS since there's a buffering window before sound starts.

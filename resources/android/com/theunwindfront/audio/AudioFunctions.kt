@@ -205,8 +205,11 @@ class AudioFunctions {
         /** Current playback position in seconds. */
         private fun positionSeconds(): Double = (mediaPlayer?.currentPosition ?: 0) / 1000.0
 
-        /** Total duration in seconds. */
-        private fun durationSeconds(): Double = (mediaPlayer?.duration ?: 0) / 1000.0
+        /** Total duration in seconds. Returns 0.0 for live/indefinite streams (duration = -1). */
+        private fun durationSeconds(): Double {
+            val ms = mediaPlayer?.duration ?: 0
+            return if (ms < 0) 0.0 else ms / 1000.0
+        }
 
         /**
          * Dispatch a Laravel event to PHP via the WebView bridge.
@@ -269,9 +272,8 @@ class AudioFunctions {
 
             val params = JSONObject(parameters)
             val url = params.optString("url")
-            val result = JSONObject()
 
-            try {
+            return try {
                 mediaPlayer?.stop()
                 mediaPlayer?.release()
 
@@ -285,7 +287,16 @@ class AudioFunctions {
                             .build()
                     )
                     setDataSource(activity, Uri.parse(url))
-                    prepare()
+
+                    // prepareAsync() returns immediately so the bridge is not blocked while
+                    // the HLS playlist is fetched and the first segment is buffered.
+                    // PlaybackStarted fires from onPreparedListener once playback actually begins.
+                    setOnPreparedListener { mp ->
+                        requestAudioFocus(activity)
+                        mp.start()
+                        AudioService.start(activity)
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStarted", mapOf("url" to url))
+                    }
 
                     setOnCompletionListener {
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackCompleted", mapOf(
@@ -302,28 +313,17 @@ class AudioFunctions {
                         false
                     }
 
-                    // Request audio focus before starting playback
-                    requestAudioFocus(activity)
-
-                    start()
+                    prepareAsync()
                 }
 
-                // Start the foreground service so playback survives backgrounding
-                AudioService.start(activity)
-
-                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStarted", mapOf("url" to url))
-
-                result.put("success", true)
+                mapOf("success" to true)
             } catch (e: Exception) {
                 sendEvent("Theunwindfront\\Audio\\Events\\PlaybackFailed", mapOf(
                     "url" to url,
                     "error" to (e.message ?: "Unknown error")
                 ))
-                result.put("success", false)
-                result.put("error", e.message)
+                mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
             }
-
-            return result.toMap()
         }
     }
 

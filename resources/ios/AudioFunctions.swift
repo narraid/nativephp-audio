@@ -38,10 +38,10 @@ enum AudioFunctions {
         return p.isNaN ? 0.0 : p
     }
 
-    /** Total duration of the loaded item in seconds, NaN-safe. */
+    /** Total duration of the loaded item in seconds. Returns 0.0 for live/indefinite streams. */
     private static func durationSeconds() -> Double {
         let d = playerItem?.duration.seconds ?? 0.0
-        return d.isNaN ? 0.0 : d
+        return (d.isNaN || d.isInfinite) ? 0.0 : d
     }
 
     // MARK: - Remote command centre
