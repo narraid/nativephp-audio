@@ -558,9 +558,16 @@ class AudioFunctions {
             }
 
             session.setMetadata(metaBuilder.build())
-            updateSessionState()
 
-            // Refresh the foreground service notification with the new track info
+            // Only sync the playback state when audio is active so we don't
+            // overwrite STATE_PLAYING with STATE_PAUSED while a track is running.
+            if (mediaPlayer != null) {
+                updateSessionState()
+            }
+
+            // Ensure the foreground service (and its notification) exists so the
+            // metadata is visible on the lock screen immediately — even when
+            // setMetadata() is called before play().
             AudioService.updateNotification(
                 context,
                 title,

@@ -363,4 +363,17 @@ Livewire:
 #[On('native:Theunwindfront\\Audio\\Events\\RemoteSeekReceived')]                                                                                                                                                     
 public function handleRemoteSeek($url, $position, $duration, $seekTo) {                                                                                                                                                 
 // update your UI position state                                   
-}                                                                              
+}                                      
+
+⏺ Here's what was fixed:
+
+iOS (AudioFunctions.swift — SetMetadata):
+- The AVAudioSession category (.playback) and setActive(true) are now called before writing to MPNowPlayingInfoCenter. Without this, on the very first call the
+  OS has no active playback session to attach the info to, so it renders a blank "Now Playing" block.
+- setupRemoteCommands() is now called (changed from private to internal), which registers the lock screen widget handlers immediately — this is required for the
+  widget to appear on the first call.
+
+Android (AudioFunctions.kt — SetMetadata):
+- updateSessionState() is now only called when mediaPlayer != null (i.e. audio is actually loaded). Previously it always set STATE_PAUSED with speed 0.0f when  
+  called before play(), which caused some Android versions to hide or grey out the lock screen media controls. After play() sets STATE_PLAYING, the second        
+  setMetadata call would correctly show the controls — that was the race you were seeing.   

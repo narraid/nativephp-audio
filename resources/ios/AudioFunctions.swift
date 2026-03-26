@@ -77,7 +77,7 @@ enum AudioFunctions {
      * lock screen / Control Center, and tapping that UI brings the app to the foreground —
      * no extra "tap to open" code is required.
      */
-    private static func setupRemoteCommands() {
+    static func setupRemoteCommands() {
         guard !remoteCommandsRegistered else { return }
         remoteCommandsRegistered = true
 
@@ -588,6 +588,17 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "title is required.")
             }
 
+            // Configure and activate the audio session with the playback category BEFORE
+            // writing to MPNowPlayingInfoCenter. Without an active .playback session the OS
+            // will not display the now-playing widget on the first call.
+            let audioSession = AVAudioSession.sharedInstance()
+            try? audioSession.setCategory(.playback, mode: .default)
+            try? audioSession.setActive(true)
+
+            // Register remote command handlers so the lock screen / Control Center
+            // widget appears immediately, even when called before play().
+            AudioFunctions.setupRemoteCommands()
+
             var info: [String: Any] = [:]
             info[MPMediaItemPropertyTitle] = title
 
@@ -618,9 +629,6 @@ enum AudioFunctions {
             }
 
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-
-            // Activate the audio session so remote-control events are delivered
-            try? AVAudioSession.sharedInstance().setActive(true)
 
             return BridgeResponse.success(data: ["success": true])
         }
