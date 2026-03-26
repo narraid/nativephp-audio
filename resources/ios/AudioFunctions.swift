@@ -39,7 +39,8 @@ enum AudioFunctions {
         progressObserver = p.addPeriodicTimeObserver(forInterval: cmInterval, queue: .main) { _ in
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated", [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ])
         }
     }
@@ -89,7 +90,8 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             let payload: [String: Any] = [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ]
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
@@ -103,7 +105,8 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             let payload: [String: Any] = [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ]
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
@@ -115,7 +118,8 @@ enum AudioFunctions {
             guard let player = AudioFunctions.player else { return .noSuchContent }
             let payload: [String: Any] = [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ]
             if player.rate > 0 {
                 player.pause()
@@ -134,7 +138,8 @@ enum AudioFunctions {
         center.nextTrackCommand.addTarget { _ in
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived", [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ])
             return .success
         }
@@ -143,7 +148,8 @@ enum AudioFunctions {
         center.previousTrackCommand.addTarget { _ in
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived", [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ])
             return .success
         }
@@ -153,7 +159,8 @@ enum AudioFunctions {
             guard AudioFunctions.player != nil else { return .noSuchContent }
             let payload: [String: Any] = [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ]
             AudioFunctions.stopProgressTimer()
             AudioFunctions.player?.pause()
@@ -206,7 +213,8 @@ enum AudioFunctions {
                     AudioFunctions.syncNowPlayingState()
                     let payload: [String: Any] = [
                         "position": AudioFunctions.positionSeconds(),
-                        "duration": AudioFunctions.durationSeconds()
+                        "duration": AudioFunctions.durationSeconds(),
+                        "url": AudioFunctions.currentURL
                     ]
                     LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
                     LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
@@ -217,7 +225,8 @@ enum AudioFunctions {
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                 let payload: [String: Any] = [
                     "position": AudioFunctions.positionSeconds(),
-                    "duration": AudioFunctions.durationSeconds()
+                    "duration": AudioFunctions.durationSeconds(),
+                    "url": AudioFunctions.currentURL
                 ]
                 LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusGained", payload)
 
@@ -252,7 +261,8 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             let payload: [String: Any] = [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ]
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
@@ -290,6 +300,14 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
 
+            // Optional metadata — included in PlaybackStarted and used to populate
+            // lock screen / Bluetooth controls immediately without a separate setMetadata call.
+            let title    = parameters["title"]    as? String
+            let artist   = parameters["artist"]   as? String
+            let album    = parameters["album"]    as? String
+            let artwork  = parameters["artwork"]  as? String
+            let duration = (parameters["duration"] as? NSNumber)?.doubleValue
+
             // Cleanup previous observers if any
             if let observer = AudioFunctions.completionObserver {
                 NotificationCenter.default.removeObserver(observer)
@@ -314,6 +332,27 @@ enum AudioFunctions {
             AudioFunctions.currentURL = urlString
             AudioFunctions.playerItem = AVPlayerItem(url: url)
             AudioFunctions.player = AVPlayer(playerItem: AudioFunctions.playerItem)
+
+            // Apply metadata to MPNowPlayingInfoCenter immediately if provided
+            if let title = title {
+                var info: [String: Any] = [:]
+                info[MPMediaItemPropertyTitle] = title
+                if let artist   = artist   { info[MPMediaItemPropertyArtist]       = artist }
+                if let album    = album    { info[MPMediaItemPropertyAlbumTitle]    = album }
+                if let duration = duration { info[MPMediaItemPropertyPlaybackDuration] = duration }
+                info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = 0.0
+                info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
+                if let artworkString = artwork {
+                    if let image = UIImage(contentsOfFile: artworkString) {
+                        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    } else if let artUrl = URL(string: artworkString),
+                              let data = try? Data(contentsOf: artUrl),
+                              let image = UIImage(data: data) {
+                        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    }
+                }
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            }
 
             // Add completion observer
             AudioFunctions.completionObserver = NotificationCenter.default.addObserver(
@@ -342,7 +381,13 @@ enum AudioFunctions {
             }
 
             AudioFunctions.player?.play()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", ["url": urlString])
+
+            var startedPayload: [String: Any] = ["url": urlString]
+            if let title    = title    { startedPayload["title"]    = title }
+            if let artist   = artist   { startedPayload["artist"]   = artist }
+            if let album    = album    { startedPayload["album"]    = album }
+            if let duration = duration { startedPayload["duration"] = duration }
+            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", startedPayload)
 
             return BridgeResponse.success(data: ["success": true])
         }
@@ -358,7 +403,8 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ])
             return BridgeResponse.success(data: ["success": true])
         }
@@ -374,7 +420,8 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", [
                 "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds()
+                "duration": AudioFunctions.durationSeconds(),
+                "url": AudioFunctions.currentURL
             ])
             return BridgeResponse.success(data: ["success": true])
         }
@@ -417,7 +464,8 @@ enum AudioFunctions {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", [
                 "position": position,
-                "duration": duration
+                "duration": duration,
+                "url": AudioFunctions.currentURL
             ])
             return BridgeResponse.success(data: ["success": true])
         }
@@ -440,7 +488,8 @@ enum AudioFunctions {
                 LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackSeeked", [
                     "from": from,
                     "to": seconds,
-                    "duration": duration
+                    "duration": duration,
+                    "url": AudioFunctions.currentURL
                 ])
             }
             return BridgeResponse.success(data: ["success": true])

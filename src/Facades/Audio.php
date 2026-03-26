@@ -5,7 +5,7 @@ namespace Theunwindfront\Audio\Facades;
 use Illuminate\Support\Facades\Facade;
 
 /**
- * @method static bool play(string $url)
+ * @method static bool play(string $url, ?string $title = null, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null)
  * @method static bool pause()
  * @method static bool resume()
  * @method static bool stop()

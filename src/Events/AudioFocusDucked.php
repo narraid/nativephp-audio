@@ -10,6 +10,7 @@ class AudioFocusDucked
     use Dispatchable, SerializesModels;
 
     public function __construct(
+        public string $url,
         public float $position,
         public float $duration,
     ) {

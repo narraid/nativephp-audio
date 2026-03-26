@@ -58,7 +58,8 @@ class AudioFunctions {
                     if (mediaPlayer?.isPlaying == true) {
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated", mapOf(
                             "position" to positionSeconds(),
-                            "duration" to durationSeconds()
+                            "duration" to durationSeconds(),
+                            "url" to currentUrl
                         ))
                     }
                     handler.postDelayed(this, intervalMs)
@@ -83,7 +84,7 @@ class AudioFunctions {
                         mediaPlayer?.pause()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
                         sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusLost", payload)
                     }
@@ -95,7 +96,7 @@ class AudioFunctions {
                         mediaPlayer?.pause()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
                         sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
                     }
@@ -105,7 +106,8 @@ class AudioFunctions {
                     mediaPlayer?.setVolume(userVolume * DUCK_FACTOR, userVolume * DUCK_FACTOR)
                     sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusDucked", mapOf(
                         "position" to positionSeconds(),
-                        "duration" to durationSeconds()
+                        "duration" to durationSeconds(),
+                        "url" to currentUrl
                     ))
                 }
                 AudioManager.AUDIOFOCUS_GAIN -> {
@@ -118,12 +120,14 @@ class AudioFunctions {
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", mapOf(
                             "position" to positionSeconds(),
-                            "duration" to durationSeconds()
+                            "duration" to durationSeconds(),
+                            "url" to currentUrl
                         ))
                     }
                     sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusGained", mapOf(
                         "position" to positionSeconds(),
-                        "duration" to durationSeconds()
+                        "duration" to durationSeconds(),
+                        "url" to currentUrl
                     ))
                 }
             }
@@ -182,7 +186,7 @@ class AudioFunctions {
                         mediaPlayer?.start()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
                         sendEvent("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
                     }
@@ -191,7 +195,7 @@ class AudioFunctions {
                         mediaPlayer?.pause()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds())
+                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
                         sendEvent("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
                     }
@@ -199,14 +203,16 @@ class AudioFunctions {
                     override fun onSkipToNext() {
                         sendEvent("Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived", mapOf(
                             "position" to positionSeconds(),
-                            "duration" to durationSeconds()
+                            "duration" to durationSeconds(),
+                            "url" to currentUrl
                         ))
                     }
 
                     override fun onSkipToPrevious() {
                         sendEvent("Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived", mapOf(
                             "position" to positionSeconds(),
-                            "duration" to durationSeconds()
+                            "duration" to durationSeconds(),
+                            "url" to currentUrl
                         ))
                     }
 
@@ -219,7 +225,7 @@ class AudioFunctions {
                         mediaPlayer = null
                         abandonAudioFocus()
                         activityRef?.get()?.let { AudioService.stop(it) }
-                        val payload = mapOf("position" to position, "duration" to duration)
+                        val payload = mapOf("position" to position, "duration" to duration, "url" to currentUrl)
                         sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStopped", payload)
                         sendEvent("Theunwindfront\\Audio\\Events\\RemoteStopReceived", payload)
                     }
@@ -256,20 +262,17 @@ class AudioFunctions {
 
         /** Toggle play/pause from the notification action button. */
         fun togglePlayPause() {
+            val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
             if (mediaPlayer?.isPlaying == true) {
                 mediaPlayer?.pause()
                 updateSessionState()
-                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", mapOf(
-                    "position" to positionSeconds(),
-                    "duration" to durationSeconds()
-                ))
+                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
+                sendEvent("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
             } else {
                 mediaPlayer?.start()
                 updateSessionState()
-                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", mapOf(
-                    "position" to positionSeconds(),
-                    "duration" to durationSeconds()
-                ))
+                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
+                sendEvent("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
             }
         }
 
@@ -304,11 +307,43 @@ class AudioFunctions {
             val params = JSONObject(parameters)
             val url = params.optString("url")
 
+            // Optional metadata — included in PlaybackStarted and used to populate
+            // lock screen / Bluetooth controls immediately without a separate setMetadata call.
+            val title   = params.optString("title").takeIf { it.isNotEmpty() }
+            val artist  = params.optString("artist").takeIf { it.isNotEmpty() }
+            val album   = params.optString("album").takeIf { it.isNotEmpty() }
+            val artwork = params.optString("artwork").takeIf { it.isNotEmpty() }
+            val duration = if (params.has("duration")) params.optDouble("duration") else null
+
             return try {
                 mediaPlayer?.stop()
                 mediaPlayer?.release()
 
                 currentUrl = url
+
+                // Apply metadata to MediaSession immediately if provided
+                if (title != null) {
+                    val session = getOrCreateSession(activity)
+                    val metaBuilder = MediaMetadataCompat.Builder()
+                        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+                    artist?.let { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
+                    album?.let  { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
+                    duration?.let { metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (it * 1000).toLong()) }
+                    artwork?.let { artworkSrc ->
+                        try {
+                            val bitmap = if (artworkSrc.startsWith("http://") || artworkSrc.startsWith("https://")) {
+                                BitmapFactory.decodeStream(URL(artworkSrc).openStream())
+                            } else {
+                                BitmapFactory.decodeFile(artworkSrc)
+                            }
+                            bitmap?.let {
+                                currentArtwork = it
+                                metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    session.setMetadata(metaBuilder.build())
+                }
 
                 mediaPlayer = MediaPlayer().apply {
                     setAudioAttributes(
@@ -325,8 +360,13 @@ class AudioFunctions {
                     setOnPreparedListener { mp ->
                         requestAudioFocus(activity)
                         mp.start()
-                        AudioService.start(activity)
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStarted", mapOf("url" to url))
+                        AudioService.start(activity, title ?: "Now Playing", artist)
+                        val payload = mutableMapOf<String, Any>("url" to url)
+                        title?.let   { payload["title"] = it }
+                        artist?.let  { payload["artist"] = it }
+                        album?.let   { payload["album"] = it }
+                        duration?.let { payload["duration"] = it }
+                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStarted", payload)
                     }
 
                     setOnCompletionListener {
@@ -365,7 +405,8 @@ class AudioFunctions {
             AudioService.refreshPlayState(context)
             sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", mapOf(
                 "position" to positionSeconds(),
-                "duration" to durationSeconds()
+                "duration" to durationSeconds(),
+                "url" to currentUrl
             ))
             return mapOf("success" to true)
         }
@@ -378,7 +419,8 @@ class AudioFunctions {
             AudioService.refreshPlayState(context)
             sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", mapOf(
                 "position" to positionSeconds(),
-                "duration" to durationSeconds()
+                "duration" to durationSeconds(),
+                "url" to currentUrl
             ))
             return mapOf("success" to true)
         }
@@ -397,7 +439,8 @@ class AudioFunctions {
             AudioService.stop(context)
             sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStopped", mapOf(
                 "position" to position,
-                "duration" to duration
+                "duration" to duration,
+                "url" to currentUrl
             ))
             return mapOf("success" to true)
         }
@@ -413,7 +456,8 @@ class AudioFunctions {
             sendEvent("Theunwindfront\\Audio\\Events\\PlaybackSeeked", mapOf(
                 "from" to from,
                 "to" to seconds,
-                "duration" to duration
+                "duration" to duration,
+                "url" to currentUrl
             ))
             return mapOf("success" to true)
         }
