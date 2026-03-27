@@ -334,7 +334,9 @@ class AudioFunctions {
 
                 currentUrl = url
 
-                // Apply metadata to MediaSession immediately if provided
+                // Apply metadata to MediaSession immediately if provided.
+                // Artwork is loaded asynchronously so the player is not blocked waiting for
+                // a network download before the session metadata is set.
                 if (title != null) {
                     val session = getOrCreateSession(activity)
                     val metaBuilder = MediaMetadataCompat.Builder()
@@ -342,20 +344,32 @@ class AudioFunctions {
                     artist?.let { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
                     album?.let  { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
                     duration?.let { metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (it * 1000).toLong()) }
-                    artwork?.let { artworkSrc ->
-                        try {
-                            val bitmap = if (artworkSrc.startsWith("http://") || artworkSrc.startsWith("https://")) {
-                                BitmapFactory.decodeStream(URL(artworkSrc).openStream())
-                            } else {
-                                BitmapFactory.decodeFile(artworkSrc)
-                            }
-                            bitmap?.let {
-                                currentArtwork = it
-                                metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
-                            }
-                        } catch (_: Exception) {}
-                    }
                     session.setMetadata(metaBuilder.build())
+
+                    artwork?.let { artworkSrc ->
+                        val durationMs = duration?.let { (it * 1000).toLong() }
+                        Thread {
+                            try {
+                                val bitmap = if (artworkSrc.startsWith("http://") || artworkSrc.startsWith("https://")) {
+                                    BitmapFactory.decodeStream(URL(artworkSrc).openStream())
+                                } else {
+                                    BitmapFactory.decodeFile(artworkSrc)
+                                }
+                                bitmap?.let { bmp ->
+                                    currentArtwork = bmp
+                                    val updated = MediaMetadataCompat.Builder()
+                                        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+                                    artist?.let { updated.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
+                                    album?.let  { updated.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
+                                    durationMs?.let { updated.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, it) }
+                                    updated.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bmp)
+                                    Handler(Looper.getMainLooper()).post {
+                                        session.setMetadata(updated.build())
+                                    }
+                                }
+                            } catch (_: Exception) {}
+                        }.start()
+                    }
                 }
 
                 mediaPlayer = MediaPlayer().apply {
@@ -531,56 +545,51 @@ class AudioFunctions {
     class SetMetadata(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             val params = JSONObject(parameters)
-            val title = params.optString("title").takeIf { it.isNotEmpty() }
+            val title  = params.optString("title").takeIf { it.isNotEmpty() }
                 ?: return mapOf("success" to false, "error" to "title is required")
+            val artist     = params.optString("artist").takeIf { it.isNotEmpty() }
+            val album      = params.optString("album").takeIf { it.isNotEmpty() }
+            val durationMs = if (params.has("duration")) (params.optDouble("duration", 0.0) * 1000).toLong() else null
 
             val session = getOrCreateSession(context)
 
             val metaBuilder = MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+            artist?.let { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
+            album?.let  { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
+            durationMs?.let { metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, it) }
 
-            params.optString("artist").takeIf { it.isNotEmpty() }?.let {
-                metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it)
-            }
-            params.optString("album").takeIf { it.isNotEmpty() }?.let {
-                metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it)
-            }
-            if (params.has("duration")) {
-                val durationMs = (params.optDouble("duration", 0.0) * 1000).toLong()
-                metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
-            }
-
-            params.optString("artwork").takeIf { it.isNotEmpty() }?.let { artworkSrc ->
-                try {
-                    val bitmap: Bitmap? = if (artworkSrc.startsWith("http://") || artworkSrc.startsWith("https://")) {
-                        val stream = URL(artworkSrc).openStream()
-                        BitmapFactory.decodeStream(stream)
-                    } else {
-                        BitmapFactory.decodeFile(artworkSrc)
-                    }
-                    bitmap?.let {
-                        currentArtwork = it
-                        metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
-                    }
-                } catch (_: Exception) { /* artwork is optional — ignore fetch failures */ }
-            }
-
+            // Set metadata and update the notification immediately without artwork so title/artist
+            // appear on the lock screen right away, without blocking on a network download.
             session.setMetadata(metaBuilder.build())
+            if (mediaPlayer != null) updateSessionState()
+            AudioService.updateNotification(context, title, artist)
 
-            // Only sync the playback state when audio is active so we don't
-            // overwrite STATE_PLAYING with STATE_PAUSED while a track is running.
-            if (mediaPlayer != null) {
-                updateSessionState()
+            // Load artwork on a background thread and patch it in once available.
+            params.optString("artwork").takeIf { it.isNotEmpty() }?.let { artworkSrc ->
+                Thread {
+                    try {
+                        val bitmap: Bitmap? = if (artworkSrc.startsWith("http://") || artworkSrc.startsWith("https://")) {
+                            BitmapFactory.decodeStream(URL(artworkSrc).openStream())
+                        } else {
+                            BitmapFactory.decodeFile(artworkSrc)
+                        }
+                        bitmap?.let { bmp ->
+                            currentArtwork = bmp
+                            val updated = MediaMetadataCompat.Builder()
+                                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+                            artist?.let { updated.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
+                            album?.let  { updated.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
+                            durationMs?.let { updated.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, it) }
+                            updated.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bmp)
+                            Handler(Looper.getMainLooper()).post {
+                                session.setMetadata(updated.build())
+                                AudioService.updateNotification(context, title, artist)
+                            }
+                        }
+                    } catch (_: Exception) { /* artwork is optional — ignore fetch failures */ }
+                }.start()
             }
-
-            // Ensure the foreground service (and its notification) exists so the
-            // metadata is visible on the lock screen immediately — even when
-            // setMetadata() is called before play().
-            AudioService.updateNotification(
-                context,
-                title,
-                params.optString("artist").takeIf { it.isNotEmpty() }
-            )
 
             return mapOf("success" to true)
         }

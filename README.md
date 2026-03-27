@@ -376,4 +376,23 @@ iOS (AudioFunctions.swift — SetMetadata):
 Android (AudioFunctions.kt — SetMetadata):
 - updateSessionState() is now only called when mediaPlayer != null (i.e. audio is actually loaded). Previously it always set STATE_PAUSED with speed 0.0f when  
   called before play(), which caused some Android versions to hide or grey out the lock screen media controls. After play() sets STATE_PLAYING, the second        
-  setMetadata call would correctly show the controls — that was the race you were seeing.   
+  setMetadata call would correctly show the controls — that was the race you were seeing.
+  Changes Made
+
+  All 4 locations now follow the same pattern:
+
+  1. Set metadata immediately without artwork → title/artist appear on lock screen right away
+  2. Load artwork on a background thread (DispatchQueue.global on iOS, Thread { } on Android)
+  3. Patch artwork in on the main thread once loaded
+
+  ┌──────────────────────┬────────────────────────────────────────┐                                                                                                                                                       
+  │         File         │                Location                │                                                                                                                                                     
+  ├──────────────────────┼────────────────────────────────────────┤                                                                                                                                                       
+  │ AudioFunctions.swift │ SetMetadata.execute()                  │                                                                                                                                                     
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ AudioFunctions.swift │ Play.execute() (inline metadata block) │                                                                                                                                                       
+  ├──────────────────────┼────────────────────────────────────────┤
+  │ AudioFunctions.kt    │ SetMetadata.execute()                  │                                                                                                                                                       
+  ├──────────────────────┼────────────────────────────────────────┤                                                                                                                                                       
+  │ AudioFunctions.kt    │ Play.execute() (inline metadata block) │
+  └──────────────────────┴────────────────────────────────────────┘         

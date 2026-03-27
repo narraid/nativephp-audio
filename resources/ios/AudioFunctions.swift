@@ -354,7 +354,9 @@ enum AudioFunctions {
             AudioFunctions.playerItem = AVPlayerItem(url: url)
             AudioFunctions.player = AVPlayer(playerItem: AudioFunctions.playerItem)
 
-            // Apply metadata to MPNowPlayingInfoCenter immediately if provided
+            // Apply metadata to MPNowPlayingInfoCenter immediately if provided.
+            // Artwork is loaded asynchronously so the player is not blocked waiting for
+            // a network download before nowPlayingInfo is set.
             if let title = title {
                 var info: [String: Any] = [:]
                 info[MPMediaItemPropertyTitle] = title
@@ -363,16 +365,27 @@ enum AudioFunctions {
                 if let duration = duration { info[MPMediaItemPropertyPlaybackDuration] = duration }
                 info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = 0.0
                 info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
                 if let artworkString = artwork {
-                    if let image = UIImage(contentsOfFile: artworkString) {
-                        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                    } else if let artUrl = URL(string: artworkString),
-                              let data = try? Data(contentsOf: artUrl),
-                              let image = UIImage(data: data) {
-                        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        var loaded: MPMediaItemArtwork? = nil
+                        if let image = UIImage(contentsOfFile: artworkString) {
+                            loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                        } else if let artUrl = URL(string: artworkString),
+                                  let data = try? Data(contentsOf: artUrl),
+                                  let image = UIImage(data: data) {
+                            loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                        }
+                        if let artwork = loaded {
+                            DispatchQueue.main.async {
+                                var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                                current[MPMediaItemPropertyArtwork] = artwork
+                                MPNowPlayingInfoCenter.default().nowPlayingInfo = current
+                            }
+                        }
                     }
                 }
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
             }
 
             // Add completion observer
@@ -609,29 +622,37 @@ enum AudioFunctions {
             info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isNaN ? 0.0 : elapsed
             info[MPNowPlayingInfoPropertyPlaybackRate] = AudioFunctions.player?.rate ?? 0.0
 
-            if let artworkString = parameters["artwork"] as? String {
-                if let image = UIImage(contentsOfFile: artworkString) {
-                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                } else if let url = URL(string: artworkString),
-                          let data = try? Data(contentsOf: url),
-                          let image = UIImage(data: data) {
-                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                }
-            }
-
-            // Apple requires MPNowPlayingInfoCenter and AVAudioSession updates to happen
-            // on the main thread. NativePHPCall is invoked from the PHP worker thread, so
-            // dispatch to main. Without this the OS silently ignores the update on the
-            // first call (no audio engine refresh is running yet to flush the write).
-            let infoToSet = info
+            // Dispatch title/artist/album to the main thread immediately so the lock screen
+            // shows them without waiting for artwork. Artwork is loaded on a background thread
+            // and patched in once available — a blocking Data(contentsOf:) call here would
+            // delay the entire nowPlayingInfo update until the download finishes.
+            let infoWithoutArtwork = info
             DispatchQueue.main.async {
                 let session = AVAudioSession.sharedInstance()
                 try? session.setCategory(.playback, mode: .default)
                 try? session.setActive(true)
-                // Register lock-screen / Control Center handlers so the widget appears
-                // immediately, even when setMetadata() is called before play().
                 AudioFunctions.setupRemoteCommands()
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = infoToSet
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = infoWithoutArtwork
+            }
+
+            if let artworkString = parameters["artwork"] as? String {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var loaded: MPMediaItemArtwork? = nil
+                    if let image = UIImage(contentsOfFile: artworkString) {
+                        loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    } else if let url = URL(string: artworkString),
+                              let data = try? Data(contentsOf: url),
+                              let image = UIImage(data: data) {
+                        loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    }
+                    if let artwork = loaded {
+                        DispatchQueue.main.async {
+                            var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                            current[MPMediaItemPropertyArtwork] = artwork
+                            MPNowPlayingInfoCenter.default().nowPlayingInfo = current
+                        }
+                    }
+                }
             }
 
             return BridgeResponse.success(data: ["success": true])
