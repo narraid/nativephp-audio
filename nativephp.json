@@ -55,12 +55,6 @@
             "android": "com.theunwindfront.audio.AudioFunctions.SetMetadata",
             "ios": "AudioFunctions.SetMetadata",
             "description": "Set track metadata (title, artist, album, artwork, duration) for lock screens, Bluetooth devices, and OS media centers"
-        },
-        {
-            "name": "Audio.setProgressInterval",
-            "android": "com.theunwindfront.audio.AudioFunctions.SetProgressInterval",
-            "ios": "AudioFunctions.SetProgressInterval",
-            "description": "Set the interval in seconds at which PlaybackProgressUpdated events are fired (0 to disable)"
         }
     ],
 

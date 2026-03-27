@@ -31,6 +31,10 @@ enum AudioFunctions {
     private static var remoteCommandsRegistered = false
     private static var pausedByFocusLoss = false
 
+    // MARK: - Progress Defaults
+
+    private static let defaultProgressInterval: Double = 10.0
+
     // MARK: - Event Helpers
 
     private static let eventPrefix = "Theunwindfront\\Audio\\Events\\"
@@ -377,6 +381,7 @@ enum AudioFunctions {
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: AudioFunctions.playerItem, queue: .main
             ) { _ in
+                AudioFunctions.stopProgressTimer()
                 AudioFunctions.sendEvent("PlaybackCompleted", [
                     "url": urlString, "duration": AudioFunctions.durationSeconds()
                 ])
@@ -387,6 +392,7 @@ enum AudioFunctions {
                 forName: .AVPlayerItemFailedToPlayToEndTime,
                 object: AudioFunctions.playerItem, queue: .main
             ) { notification in
+                AudioFunctions.stopProgressTimer()
                 let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
                     .localizedDescription ?? "Unknown error"
                 AudioFunctions.sendEvent("PlaybackFailed", ["url": urlString, "error": error])
@@ -395,6 +401,7 @@ enum AudioFunctions {
             AudioFunctions.player?.play()
             // Sync rate/elapsed after play() so the lock screen shows the correct state.
             AudioFunctions.syncNowPlayingState()
+            AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
 
             var startedPayload: [String: Any] = ["url": urlString]
             if let t = title    { startedPayload["title"]    = t }
@@ -411,6 +418,7 @@ enum AudioFunctions {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.pause()
             AudioFunctions.syncNowPlayingState()
+            AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
             AudioFunctions.sendEvent("PlaybackPaused", AudioFunctions.statePayload())
             return BridgeResponse.success(data: ["success": true])
         }
@@ -420,6 +428,7 @@ enum AudioFunctions {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.play()
             AudioFunctions.syncNowPlayingState()
+            AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
             AudioFunctions.sendEvent("PlaybackResumed", AudioFunctions.statePayload())
             return BridgeResponse.success(data: ["success": true])
         }
@@ -440,6 +449,7 @@ enum AudioFunctions {
             let from     = AudioFunctions.positionSeconds()
             let duration = AudioFunctions.durationSeconds()
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
+                AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
                 AudioFunctions.sendEvent("PlaybackSeeked", [
                     "from": from, "to": seconds, "duration": duration, "url": AudioFunctions.currentURL
                 ])
@@ -464,14 +474,6 @@ enum AudioFunctions {
     class GetCurrentPosition: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             return BridgeResponse.success(data: ["position": AudioFunctions.positionSeconds()])
-        }
-    }
-
-    class SetProgressInterval: BridgeFunction {
-        func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let seconds = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
-            AudioFunctions.startProgressTimer(interval: seconds)
-            return BridgeResponse.success(data: ["success": true])
         }
     }
 

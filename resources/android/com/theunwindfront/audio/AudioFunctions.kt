@@ -48,6 +48,7 @@ class AudioFunctions {
         private var pausedByFocusLoss = false
 
         // ── Progress Timer ────────────────────────────────────────────────────
+        private const val DEFAULT_PROGRESS_INTERVAL_MS: Long = 10_000
         private var progressHandler: Handler? = null
         private var progressRunnable: Runnable? = null
         private var progressIntervalMs: Long = 0
@@ -59,8 +60,8 @@ class AudioFunctions {
             // can be dispatched safely, and restart the progress timer if audio is playing.
             NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_RESUME) { _ ->
                 MainActivity.instance?.let { activityRef = WeakReference(it) }
-                if (mediaPlayer?.isPlaying == true && progressIntervalMs > 0) {
-                    startProgressTimer(progressIntervalMs)
+                if (mediaPlayer?.isPlaying == true) {
+                    startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
                 }
             }
             // When the app backgrounds: stop the progress timer. NativeActionCoordinator
@@ -417,6 +418,7 @@ class AudioFunctions {
                                 requestAudioFocus(activity)
                                 mp.start()
                                 updateSessionState()
+                                startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
                                 // Use stored metadata for service notification, falling back to defaults.
                                 val serviceTitle  = metaTitle ?: "Now Playing"
                                 val serviceArtist = metaArtist
@@ -430,12 +432,14 @@ class AudioFunctions {
                             }
 
                             setOnCompletionListener {
+                                stopProgressTimer()
                                 sendEvent("PlaybackCompleted", mapOf(
                                     "url" to currentUrl, "duration" to durationSeconds()
                                 ))
                             }
 
                             setOnErrorListener { _, what, extra ->
+                                stopProgressTimer()
                                 sendEvent("PlaybackFailed", mapOf(
                                     "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
                                 ))
@@ -465,6 +469,7 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             mediaPlayer?.pause()
             updateSessionState()
+            startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
             AudioService.refreshPlayState(context)
             sendEvent("PlaybackPaused", statePayload())
             return mapOf("success" to true)
@@ -475,6 +480,7 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             mediaPlayer?.start()
             updateSessionState()
+            startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
             AudioService.refreshPlayState(context)
             sendEvent("PlaybackResumed", statePayload())
             return mapOf("success" to true)
@@ -497,6 +503,7 @@ class AudioFunctions {
             val from     = positionSeconds()
             val duration = durationSeconds()
             mediaPlayer?.seekTo((seconds * 1000).toInt())
+            startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
             sendEvent("PlaybackSeeked", mapOf(
                 "from" to from, "to" to seconds, "duration" to duration, "url" to currentUrl
             ))
@@ -522,14 +529,6 @@ class AudioFunctions {
     class GetCurrentPosition(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             return mapOf("position" to positionSeconds())
-        }
-    }
-
-    class SetProgressInterval(private val context: Context) : BridgeFunction {
-        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val seconds = JSONObject(parameters).optDouble("seconds", 0.0)
-            startProgressTimer((seconds * 1000).toLong())
-            return mapOf("success" to true)
         }
     }
 

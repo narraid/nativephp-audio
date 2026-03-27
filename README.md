@@ -432,3 +432,23 @@ Line count reduction
 - AudioService.kt: unchanged (already clean)
 
 ✻ Brewed for 2m 20s                
+
+Changes made:
+
+1. src/Audio.php — Removed setProgressInterval() method
+2. nativephp.json — Removed Audio.setProgressInterval bridge function entry
+3. resources/ios/AudioFunctions.swift:                                                                                                                                                                                                                                  
+   - Removed SetProgressInterval bridge class                                                                                                                                                                                                                            
+   - Added defaultProgressInterval = 10.0 constant                                                                                                                                                                                                                       
+   - Auto-starts progress timer on Play (after player?.play())                                                                                                                                                                                                           
+   - Resets timer on Pause, Resume, and Seek                                                                                                                                                                                                                             
+   - Stops timer on PlaybackCompleted and PlaybackFailed                                                                                                                                                                                                                 
+   - Stop on Stop was already handled via resetPlayer()
+4. resources/android/com/theunwindfront/audio/AudioFunctions.kt:                                                                                                                                                                                                        
+   - Removed SetProgressInterval bridge class                                                                                                                                                                                                                            
+   - Added DEFAULT_PROGRESS_INTERVAL_MS = 10_000 constant                                                                                                                                                                                                                
+   - Auto-starts progress timer on Play (after mp.start())                                                                                                                                                                                                               
+   - Resets timer on Pause, Resume, and Seek                                                                                                                                                                                                                             
+   - Stops timer on PlaybackCompleted and PlaybackFailed
+   - Stop on Stop was already handled via releasePlayer()                                                                                                                                                                                                                
+   - Updated ON_RESUME lifecycle to use the default constant        

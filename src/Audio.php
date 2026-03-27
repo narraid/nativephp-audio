@@ -177,29 +177,6 @@ class Audio
     }
 
     /**
-     * Set the interval (in seconds) at which PlaybackProgressUpdated events are fired.
-     * Set to 0 to disable progress events.
-     *
-     * @param  float  $seconds  Interval in seconds (e.g. 0.5 for twice per second)
-     */
-    public function setProgressInterval(float $seconds): bool
-    {
-        $seconds = max(0.0, $seconds);
-
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setProgressInterval', json_encode(['seconds' => $seconds]));
-
-            if ($result) {
-                $decoded = json_decode($result);
-
-                return $decoded->success ?? false;
-            }
-        }
-
-        return false;
-    }
-
-    /**
      * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
      *
      * @param  string       $title    Track title
