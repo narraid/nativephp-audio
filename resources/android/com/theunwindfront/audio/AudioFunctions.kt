@@ -23,112 +23,244 @@ import java.net.URL
 
 class AudioFunctions {
     companion object {
+
+        // ── Player State ──────────────────────────────────────────────────────
         private var mediaPlayer: MediaPlayer? = null
         private var mediaSession: MediaSessionCompat? = null
-
-        /** Last artwork bitmap, shared with AudioService for the notification large icon. */
-        internal var currentArtwork: Bitmap? = null
-
-        /** URL of the currently loaded track — used in completion/error events. */
+        private var activityRef: WeakReference<FragmentActivity>? = null
         internal var currentUrl: String = ""
 
-        /** Weak reference to the host activity, set on first Play call. */
-        private var activityRef: WeakReference<FragmentActivity>? = null
+        // ── Stored Metadata (single source of truth) ──────────────────────────
+        private var metaTitle: String? = null
+        private var metaArtist: String? = null
+        private var metaAlbum: String? = null
+        private var metaDurationMs: Long? = null
+        private var metaArtworkSource: String? = null
+        internal var currentArtwork: Bitmap? = null
 
-        // ── Audio focus ──────────────────────────────────────────────────────────
+        // ── Audio Focus ───────────────────────────────────────────────────────
         private const val DUCK_FACTOR = 0.2f
         private var audioManager: AudioManager? = null
         private var audioFocusRequest: AudioFocusRequest? = null
-        /** Volume last set by the PHP side — restored after ducking. */
         internal var userVolume: Float = 1.0f
-        /** True when we paused due to transient focus loss so we can auto-resume. */
         private var pausedByFocusLoss = false
 
-        // ── Progress timer ───────────────────────────────────────────────────────
+        // ── Progress Timer ────────────────────────────────────────────────────
         private var progressHandler: Handler? = null
         private var progressRunnable: Runnable? = null
 
-        fun startProgressTimer(intervalMs: Long) {
-            stopProgressTimer()
-            if (intervalMs <= 0) return
-            val handler = Handler(Looper.getMainLooper())
-            progressHandler = handler
-            val runnable = object : Runnable {
-                override fun run() {
-                    if (mediaPlayer?.isPlaying == true) {
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated", mapOf(
-                            "position" to positionSeconds(),
-                            "duration" to durationSeconds(),
-                            "url" to currentUrl
-                        ))
-                    }
-                    handler.postDelayed(this, intervalMs)
-                }
+        // ── Event Helpers ─────────────────────────────────────────────────────
+
+        private const val EVENT_PREFIX = "Theunwindfront\\Audio\\Events\\"
+
+        internal fun sendEvent(name: String, payload: Map<String, Any>) {
+            val activity = activityRef?.get() ?: return
+            val json = JSONObject(payload).toString()
+            Handler(Looper.getMainLooper()).post {
+                NativeActionCoordinator.dispatchEvent(activity, EVENT_PREFIX + name, json)
             }
-            progressRunnable = runnable
-            handler.postDelayed(runnable, intervalMs)
         }
 
-        fun stopProgressTimer() {
-            progressRunnable?.let { progressHandler?.removeCallbacks(it) }
-            progressHandler = null
-            progressRunnable = null
+        private fun statePayload(): Map<String, Any> =
+            mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
+
+        // ── Position / Duration ───────────────────────────────────────────────
+
+        private fun positionSeconds(): Double = (mediaPlayer?.currentPosition ?: 0) / 1000.0
+
+        private fun durationSeconds(): Double {
+            val ms = mediaPlayer?.duration ?: 0
+            return if (ms < 0) 0.0 else ms / 1000.0
         }
+
+        // ── Session Metadata ──────────────────────────────────────────────────
+
+        /**
+         * Builds MediaMetadataCompat from stored metadata fields.
+         * Includes artwork bitmap if already loaded.
+         */
+        private fun buildSessionMetadata(): MediaMetadataCompat {
+            val builder = MediaMetadataCompat.Builder()
+            metaTitle?.let     { builder.putString(MediaMetadataCompat.METADATA_KEY_TITLE, it) }
+            metaArtist?.let    { builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
+            metaAlbum?.let     { builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
+            metaDurationMs?.let { builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, it) }
+            currentArtwork?.let { builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
+            return builder.build()
+        }
+
+        /**
+         * Loads artwork from URL or local file on a background thread.
+         * On success, stores the bitmap and calls [onLoaded] on the main thread.
+         */
+        private fun loadArtworkAsync(source: String, onLoaded: (Bitmap) -> Unit) {
+            Thread {
+                try {
+                    val bitmap = if (source.startsWith("http://") || source.startsWith("https://")) {
+                        BitmapFactory.decodeStream(URL(source).openStream())
+                    } else {
+                        BitmapFactory.decodeFile(source)
+                    }
+                    bitmap?.let { bmp ->
+                        currentArtwork = bmp
+                        Handler(Looper.getMainLooper()).post { onLoaded(bmp) }
+                    }
+                } catch (_: Exception) { /* artwork is optional */ }
+            }.start()
+        }
+
+        /**
+         * Applies stored metadata to the session and optionally loads artwork async.
+         * Call after metadata fields have been updated.
+         */
+        private fun applySessionMetadata(context: Context) {
+            val session = getOrCreateSession(context)
+            session.setMetadata(buildSessionMetadata())
+
+            metaArtworkSource?.let { src ->
+                loadArtworkAsync(src) {
+                    session.setMetadata(buildSessionMetadata())
+                    if (mediaPlayer != null) {
+                        AudioService.updateNotification(context, metaTitle ?: "Now Playing", metaArtist)
+                    }
+                }
+            }
+        }
+
+        // ── MediaSession ──────────────────────────────────────────────────────
+
+        fun getOrCreateSession(context: Context): MediaSessionCompat {
+            return mediaSession ?: MediaSessionCompat(context, "NativePHPAudio").also { session ->
+                session.isActive = true
+                session.setCallback(object : MediaSessionCompat.Callback() {
+                    override fun onPlay() {
+                        mediaPlayer?.start()
+                        updateSessionState()
+                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                        val payload = statePayload()
+                        sendEvent("PlaybackResumed",    payload)
+                        sendEvent("RemotePlayReceived", payload)
+                    }
+
+                    override fun onPause() {
+                        mediaPlayer?.pause()
+                        updateSessionState()
+                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                        val payload = statePayload()
+                        sendEvent("PlaybackPaused",      payload)
+                        sendEvent("RemotePauseReceived", payload)
+                    }
+
+                    override fun onSkipToNext() {
+                        sendEvent("RemoteNextTrackReceived", statePayload())
+                    }
+
+                    override fun onSkipToPrevious() {
+                        sendEvent("RemotePreviousTrackReceived", statePayload())
+                    }
+
+                    override fun onSeekTo(pos: Long) {
+                        val from = positionSeconds()
+                        mediaPlayer?.seekTo(pos.toInt())
+                        updateSessionState()
+                        sendEvent("RemoteSeekReceived", mapOf(
+                            "position" to from, "duration" to durationSeconds(),
+                            "url" to currentUrl, "seekTo" to pos / 1000.0
+                        ))
+                    }
+
+                    override fun onStop() {
+                        val payload = statePayload()
+                        releasePlayer()
+                        sendEvent("PlaybackStopped",    payload)
+                        sendEvent("RemoteStopReceived", payload)
+                    }
+                })
+                mediaSession = session
+            }
+        }
+
+        fun getSessionToken(context: Context): MediaSessionCompat.Token =
+            getOrCreateSession(context).sessionToken
+
+        fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
+
+        fun togglePlayPause() {
+            val payload = statePayload()
+            if (mediaPlayer?.isPlaying == true) {
+                mediaPlayer?.pause()
+                updateSessionState()
+                sendEvent("PlaybackPaused",      payload)
+                sendEvent("RemotePauseReceived", payload)
+            } else {
+                mediaPlayer?.start()
+                updateSessionState()
+                sendEvent("PlaybackResumed",    payload)
+                sendEvent("RemotePlayReceived", payload)
+            }
+        }
+
+        fun updateSessionState() {
+            val session = mediaSession ?: return
+            val playing = mediaPlayer?.isPlaying == true
+            val state = PlaybackStateCompat.Builder()
+                .setActions(
+                    PlaybackStateCompat.ACTION_PLAY or
+                    PlaybackStateCompat.ACTION_PAUSE or
+                    PlaybackStateCompat.ACTION_SEEK_TO or
+                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                    PlaybackStateCompat.ACTION_STOP
+                )
+                .setState(
+                    if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                    (mediaPlayer?.currentPosition ?: 0).toLong(),
+                    if (playing) 1.0f else 0.0f
+                )
+                .build()
+            session.setPlaybackState(state)
+        }
+
+        // ── Audio Focus ───────────────────────────────────────────────────────
 
         private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
             when (focusChange) {
                 AudioManager.AUDIOFOCUS_LOSS -> {
-                    // Permanent loss — another app took over media playback.
-                    pausedByFocusLoss = false  // no auto-resume after permanent loss
+                    pausedByFocusLoss = false
                     if (mediaPlayer?.isPlaying == true) {
                         mediaPlayer?.pause()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-                        sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusLost", payload)
+                        val payload = statePayload()
+                        sendEvent("PlaybackPaused",  payload)
+                        sendEvent("AudioFocusLost",  payload)
                     }
                 }
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                    // Transient loss — incoming call, Siri, etc.
                     if (mediaPlayer?.isPlaying == true) {
                         pausedByFocusLoss = true
                         mediaPlayer?.pause()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-                        sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
+                        val payload = statePayload()
+                        sendEvent("PlaybackPaused",          payload)
+                        sendEvent("AudioFocusLostTransient", payload)
                     }
                 }
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                    // Duck — lower volume while a notification or assistant speaks.
                     mediaPlayer?.setVolume(userVolume * DUCK_FACTOR, userVolume * DUCK_FACTOR)
-                    sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusDucked", mapOf(
-                        "position" to positionSeconds(),
-                        "duration" to durationSeconds(),
-                        "url" to currentUrl
-                    ))
+                    sendEvent("AudioFocusDucked", statePayload())
                 }
                 AudioManager.AUDIOFOCUS_GAIN -> {
-                    // Focus returned — restore volume and optionally resume.
                     mediaPlayer?.setVolume(userVolume, userVolume)
                     if (pausedByFocusLoss && mediaPlayer != null) {
                         pausedByFocusLoss = false
                         mediaPlayer?.start()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", mapOf(
-                            "position" to positionSeconds(),
-                            "duration" to durationSeconds(),
-                            "url" to currentUrl
-                        ))
+                        sendEvent("PlaybackResumed", statePayload())
                     }
-                    sendEvent("Theunwindfront\\Audio\\Events\\AudioFocusGained", mapOf(
-                        "position" to positionSeconds(),
-                        "duration" to durationSeconds(),
-                        "url" to currentUrl
-                    ))
+                    sendEvent("AudioFocusGained", statePayload())
                 }
             }
         }
@@ -144,7 +276,7 @@ class AudioFunctions {
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
-                    .setWillPauseWhenDucked(false)  // we handle ducking manually
+                    .setWillPauseWhenDucked(false)
                     .setOnAudioFocusChangeListener(audioFocusListener)
                     .build()
                 audioFocusRequest = request
@@ -168,164 +300,60 @@ class AudioFunctions {
             pausedByFocusLoss = false
         }
 
-        private fun JSONObject.toMap(): Map<String, Any> {
-            val map = mutableMapOf<String, Any>()
-            val keys = this.keys()
-            while (keys.hasNext()) {
-                val key = keys.next()
-                map[key] = this.get(key)
+        // ── Progress Timer ────────────────────────────────────────────────────
+
+        fun startProgressTimer(intervalMs: Long) {
+            stopProgressTimer()
+            if (intervalMs <= 0) return
+            val handler = Handler(Looper.getMainLooper())
+            progressHandler = handler
+            val runnable = object : Runnable {
+                override fun run() {
+                    if (mediaPlayer?.isPlaying == true) {
+                        sendEvent("PlaybackProgressUpdated", statePayload())
+                    }
+                    handler.postDelayed(this, intervalMs)
+                }
             }
-            return map
+            progressRunnable = runnable
+            handler.postDelayed(runnable, intervalMs)
         }
 
-        fun getOrCreateSession(context: Context): MediaSessionCompat {
-            return mediaSession ?: MediaSessionCompat(context, "NativePHPAudio").also { session ->
-                session.isActive = true
-                session.setCallback(object : MediaSessionCompat.Callback() {
-                    override fun onPlay() {
-                        mediaPlayer?.start()
-                        updateSessionState()
-                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
-                        sendEvent("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
-                    }
-
-                    override fun onPause() {
-                        mediaPlayer?.pause()
-                        updateSessionState()
-                        activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-                        sendEvent("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
-                    }
-
-                    override fun onSkipToNext() {
-                        sendEvent("Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived", mapOf(
-                            "position" to positionSeconds(),
-                            "duration" to durationSeconds(),
-                            "url" to currentUrl
-                        ))
-                    }
-
-                    override fun onSkipToPrevious() {
-                        sendEvent("Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived", mapOf(
-                            "position" to positionSeconds(),
-                            "duration" to durationSeconds(),
-                            "url" to currentUrl
-                        ))
-                    }
-
-                    override fun onSeekTo(pos: Long) {
-                        val from = positionSeconds()
-                        val seekTo = pos / 1000.0
-                        mediaPlayer?.seekTo(pos.toInt())
-                        updateSessionState()
-                        sendEvent("Theunwindfront\\Audio\\Events\\RemoteSeekReceived", mapOf(
-                            "position" to from,
-                            "duration" to durationSeconds(),
-                            "url" to currentUrl,
-                            "seekTo" to seekTo
-                        ))
-                    }
-
-                    override fun onStop() {
-                        val position = positionSeconds()
-                        val duration = durationSeconds()
-                        stopProgressTimer()
-                        mediaPlayer?.stop()
-                        mediaPlayer?.release()
-                        mediaPlayer = null
-                        abandonAudioFocus()
-                        activityRef?.get()?.let { AudioService.stop(it) }
-                        val payload = mapOf("position" to position, "duration" to duration, "url" to currentUrl)
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStopped", payload)
-                        sendEvent("Theunwindfront\\Audio\\Events\\RemoteStopReceived", payload)
-                    }
-                })
-                mediaSession = session
-            }
+        fun stopProgressTimer() {
+            progressRunnable?.let { progressHandler?.removeCallbacks(it) }
+            progressHandler = null
+            progressRunnable = null
         }
 
-        fun getSessionToken(context: Context): MediaSessionCompat.Token =
-            getOrCreateSession(context).sessionToken
-
-        fun isPlaying(): Boolean = mediaPlayer?.isPlaying == true
-
-        /** Current playback position in seconds. */
-        private fun positionSeconds(): Double = (mediaPlayer?.currentPosition ?: 0) / 1000.0
-
-        /** Total duration in seconds. Returns 0.0 for live/indefinite streams (duration = -1). */
-        private fun durationSeconds(): Double {
-            val ms = mediaPlayer?.duration ?: 0
-            return if (ms < 0) 0.0 else ms / 1000.0
-        }
+        // ── Cleanup ───────────────────────────────────────────────────────────
 
         /**
-         * Dispatch a Laravel event to PHP via the WebView bridge.
-         * Must be called from any thread — marshals to main thread internally.
+         * Fully releases the MediaPlayer, abandons audio focus, and stops the service.
          */
-        internal fun sendEvent(event: String, payload: Map<String, Any>) {
-            val activity = activityRef?.get() ?: return
-            val json = JSONObject(payload).toString()
-            Handler(Looper.getMainLooper()).post {
-                NativeActionCoordinator.dispatchEvent(activity, event, json)
-            }
-        }
-
-        /** Toggle play/pause from the notification action button. */
-        fun togglePlayPause() {
-            val payload = mapOf("position" to positionSeconds(), "duration" to durationSeconds(), "url" to currentUrl)
-            if (mediaPlayer?.isPlaying == true) {
-                mediaPlayer?.pause()
-                updateSessionState()
-                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-                sendEvent("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
-            } else {
-                mediaPlayer?.start()
-                updateSessionState()
-                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
-                sendEvent("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
-            }
-        }
-
-        /** Sync MediaSession PlaybackState with current MediaPlayer state. */
-        fun updateSessionState() {
-            val session = mediaSession ?: return
-            val playing = mediaPlayer?.isPlaying == true
-            val state = PlaybackStateCompat.Builder()
-                .setActions(
-                    PlaybackStateCompat.ACTION_PLAY or
-                    PlaybackStateCompat.ACTION_PAUSE or
-                    PlaybackStateCompat.ACTION_SEEK_TO or
-                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-                    PlaybackStateCompat.ACTION_STOP
-                )
-                .setState(
-                    if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                    (mediaPlayer?.currentPosition ?: 0).toLong(),
-                    if (playing) 1.0f else 0.0f
-                )
-                .build()
-            session.setPlaybackState(state)
+        private fun releasePlayer() {
+            stopProgressTimer()
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+            abandonAudioFocus()
+            activityRef?.get()?.let { AudioService.stop(it) }
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // Bridge Functions
+    // ═════════════════════════════════════════════════════════════════════════
+
     class Play(private val activity: FragmentActivity) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            // Store activity for event dispatch from all functions and the service
             activityRef = WeakReference(activity)
 
-            val params = JSONObject(parameters)
-            val url = params.optString("url")
-
-            // Optional metadata — included in PlaybackStarted and used to populate
-            // lock screen / Bluetooth controls immediately without a separate setMetadata call.
-            val title   = params.optString("title").takeIf { it.isNotEmpty() }
-            val artist  = params.optString("artist").takeIf { it.isNotEmpty() }
-            val album   = params.optString("album").takeIf { it.isNotEmpty() }
-            val artwork = params.optString("artwork").takeIf { it.isNotEmpty() }
+            val params   = JSONObject(parameters)
+            val url      = params.optString("url")
+            val title    = params.optString("title").takeIf { it.isNotEmpty() }
+            val artist   = params.optString("artist").takeIf { it.isNotEmpty() }
+            val album    = params.optString("album").takeIf { it.isNotEmpty() }
+            val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
             val duration = if (params.has("duration")) params.optDouble("duration") else null
 
             return try {
@@ -334,42 +362,18 @@ class AudioFunctions {
 
                 currentUrl = url
 
-                // Apply metadata to MediaSession immediately if provided.
-                // Artwork is loaded asynchronously so the player is not blocked waiting for
-                // a network download before the session metadata is set.
+                // Store inline metadata if provided; otherwise preserve metadata from a prior setMetadata call.
                 if (title != null) {
-                    val session = getOrCreateSession(activity)
-                    val metaBuilder = MediaMetadataCompat.Builder()
-                        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-                    artist?.let { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
-                    album?.let  { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
-                    duration?.let { metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (it * 1000).toLong()) }
-                    session.setMetadata(metaBuilder.build())
+                    metaTitle         = title
+                    metaArtist        = artist
+                    metaAlbum         = album
+                    metaDurationMs    = duration?.let { (it * 1000).toLong() }
+                    metaArtworkSource = artwork
+                }
 
-                    artwork?.let { artworkSrc ->
-                        val durationMs = duration?.let { (it * 1000).toLong() }
-                        Thread {
-                            try {
-                                val bitmap = if (artworkSrc.startsWith("http://") || artworkSrc.startsWith("https://")) {
-                                    BitmapFactory.decodeStream(URL(artworkSrc).openStream())
-                                } else {
-                                    BitmapFactory.decodeFile(artworkSrc)
-                                }
-                                bitmap?.let { bmp ->
-                                    currentArtwork = bmp
-                                    val updated = MediaMetadataCompat.Builder()
-                                        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-                                    artist?.let { updated.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
-                                    album?.let  { updated.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
-                                    durationMs?.let { updated.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, it) }
-                                    updated.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bmp)
-                                    Handler(Looper.getMainLooper()).post {
-                                        session.setMetadata(updated.build())
-                                    }
-                                }
-                            } catch (_: Exception) {}
-                        }.start()
-                    }
+                // Apply stored metadata to MediaSession (covers both inline and prior setMetadata).
+                if (metaTitle != null) {
+                    applySessionMetadata(activity)
                 }
 
                 mediaPlayer = MediaPlayer().apply {
@@ -381,40 +385,31 @@ class AudioFunctions {
                     )
                     setDataSource(activity, Uri.parse(url))
 
-                    // prepareAsync() returns immediately so the bridge is not blocked while
-                    // the HLS playlist is fetched and the first segment is buffered.
-                    // PlaybackStarted fires from onPreparedListener once playback actually begins.
                     setOnPreparedListener { mp ->
                         requestAudioFocus(activity)
                         mp.start()
-                        // If no title was passed to play(), preserve whatever setMetadata()
-                        // may have already set (it runs before onPreparedListener fires because
-                        // prepareAsync() returns immediately). Falling back to "Now Playing"
-                        // only when neither source has provided a real title.
-                        val serviceTitle = title
-                            ?: AudioService.currentTitle.takeIf { it != "Now Playing" }
-                            ?: "Now Playing"
-                        val serviceArtist = artist ?: AudioService.currentArtist
+                        updateSessionState()
+                        // Use stored metadata for service notification, falling back to defaults.
+                        val serviceTitle  = metaTitle ?: "Now Playing"
+                        val serviceArtist = metaArtist
                         AudioService.start(activity, serviceTitle, serviceArtist)
                         val payload = mutableMapOf<String, Any>("url" to url)
-                        title?.let   { payload["title"] = it }
-                        artist?.let  { payload["artist"] = it }
-                        album?.let   { payload["album"] = it }
+                        title?.let    { payload["title"]    = it }
+                        artist?.let   { payload["artist"]   = it }
+                        album?.let    { payload["album"]    = it }
                         duration?.let { payload["duration"] = it }
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStarted", payload)
+                        sendEvent("PlaybackStarted", payload)
                     }
 
                     setOnCompletionListener {
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackCompleted", mapOf(
-                            "url" to currentUrl,
-                            "duration" to durationSeconds()
+                        sendEvent("PlaybackCompleted", mapOf(
+                            "url" to currentUrl, "duration" to durationSeconds()
                         ))
                     }
 
                     setOnErrorListener { _, what, extra ->
-                        sendEvent("Theunwindfront\\Audio\\Events\\PlaybackFailed", mapOf(
-                            "url" to currentUrl,
-                            "error" to "MediaPlayer error: what=$what extra=$extra"
+                        sendEvent("PlaybackFailed", mapOf(
+                            "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
                         ))
                         false
                     }
@@ -424,9 +419,8 @@ class AudioFunctions {
 
                 mapOf("success" to true)
             } catch (e: Exception) {
-                sendEvent("Theunwindfront\\Audio\\Events\\PlaybackFailed", mapOf(
-                    "url" to url,
-                    "error" to (e.message ?: "Unknown error")
+                sendEvent("PlaybackFailed", mapOf(
+                    "url" to url, "error" to (e.message ?: "Unknown error")
                 ))
                 mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
             }
@@ -438,11 +432,7 @@ class AudioFunctions {
             mediaPlayer?.pause()
             updateSessionState()
             AudioService.refreshPlayState(context)
-            sendEvent("Theunwindfront\\Audio\\Events\\PlaybackPaused", mapOf(
-                "position" to positionSeconds(),
-                "duration" to durationSeconds(),
-                "url" to currentUrl
-            ))
+            sendEvent("PlaybackPaused", statePayload())
             return mapOf("success" to true)
         }
     }
@@ -452,47 +442,29 @@ class AudioFunctions {
             mediaPlayer?.start()
             updateSessionState()
             AudioService.refreshPlayState(context)
-            sendEvent("Theunwindfront\\Audio\\Events\\PlaybackResumed", mapOf(
-                "position" to positionSeconds(),
-                "duration" to durationSeconds(),
-                "url" to currentUrl
-            ))
+            sendEvent("PlaybackResumed", statePayload())
             return mapOf("success" to true)
         }
     }
 
     class Stop(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            // Capture state before releasing the player
-            val position = positionSeconds()
-            val duration = durationSeconds()
-            stopProgressTimer()
-            mediaPlayer?.stop()
-            mediaPlayer?.release()
-            mediaPlayer = null
-            abandonAudioFocus()
-            AudioService.stop(context)
-            sendEvent("Theunwindfront\\Audio\\Events\\PlaybackStopped", mapOf(
-                "position" to position,
-                "duration" to duration,
-                "url" to currentUrl
-            ))
+            val payload = statePayload()
+            releasePlayer()
+            sendEvent("PlaybackStopped", payload)
             return mapOf("success" to true)
         }
     }
 
     class Seek(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val params = JSONObject(parameters)
-            val seconds = params.optDouble("seconds", 0.0)
-            val from = positionSeconds()
+            val params   = JSONObject(parameters)
+            val seconds  = params.optDouble("seconds", 0.0)
+            val from     = positionSeconds()
             val duration = durationSeconds()
             mediaPlayer?.seekTo((seconds * 1000).toInt())
-            sendEvent("Theunwindfront\\Audio\\Events\\PlaybackSeeked", mapOf(
-                "from" to from,
-                "to" to seconds,
-                "duration" to duration,
-                "url" to currentUrl
+            sendEvent("PlaybackSeeked", mapOf(
+                "from" to from, "to" to seconds, "duration" to duration, "url" to currentUrl
             ))
             return mapOf("success" to true)
         }
@@ -500,8 +472,7 @@ class AudioFunctions {
 
     class SetVolume(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val params = JSONObject(parameters)
-            val level = params.optDouble("level", 1.0).toFloat()
+            val level = JSONObject(parameters).optDouble("level", 1.0).toFloat()
             userVolume = level
             mediaPlayer?.setVolume(level, level)
             return mapOf("success" to true)
@@ -510,85 +481,52 @@ class AudioFunctions {
 
     class GetDuration(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val duration = mediaPlayer?.duration ?: 0
-            return mapOf("duration" to duration / 1000.0)
-        }
-    }
-
-    class SetProgressInterval(private val context: Context) : BridgeFunction {
-        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val params = JSONObject(parameters)
-            val seconds = params.optDouble("seconds", 0.0)
-            startProgressTimer((seconds * 1000).toLong())
-            return mapOf("success" to true)
+            return mapOf("duration" to durationSeconds())
         }
     }
 
     class GetCurrentPosition(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val position = mediaPlayer?.currentPosition ?: 0
-            return mapOf("position" to position / 1000.0)
+            return mapOf("position" to positionSeconds())
+        }
+    }
+
+    class SetProgressInterval(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val seconds = JSONObject(parameters).optDouble("seconds", 0.0)
+            startProgressTimer((seconds * 1000).toLong())
+            return mapOf("success" to true)
         }
     }
 
     /**
-     * Sets track metadata on the MediaSession for display on lock screens,
-     * Bluetooth devices, Android Auto, and notification controls.
+     * Sets track metadata on the MediaSession for lock screens, Bluetooth, Android Auto,
+     * and notification controls.
      *
-     * Expected parameters:
-     *  - `title`    (String, required) – track title.
-     *  - `artist`   (String, optional) – artist name.
-     *  - `album`    (String, optional) – album name.
-     *  - `artwork`  (String, optional) – HTTP/S URL or absolute file path of the artwork image.
-     *  - `duration` (Number, optional) – total duration in seconds.
+     * Safe to call before Play — metadata is stored and applied when Play starts.
+     * Safe to call after Play — notification and lock screen update immediately.
      */
     class SetMetadata(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             val params = JSONObject(parameters)
             val title  = params.optString("title").takeIf { it.isNotEmpty() }
                 ?: return mapOf("success" to false, "error" to "title is required")
-            val artist     = params.optString("artist").takeIf { it.isNotEmpty() }
-            val album      = params.optString("album").takeIf { it.isNotEmpty() }
-            val durationMs = if (params.has("duration")) (params.optDouble("duration", 0.0) * 1000).toLong() else null
 
-            val session = getOrCreateSession(context)
+            // Replace all stored metadata (nil fields are intentionally cleared).
+            metaTitle         = title
+            metaArtist        = params.optString("artist").takeIf { it.isNotEmpty() }
+            metaAlbum         = params.optString("album").takeIf { it.isNotEmpty() }
+            metaDurationMs    = if (params.has("duration")) (params.optDouble("duration", 0.0) * 1000).toLong() else null
+            metaArtworkSource = params.optString("artwork").takeIf { it.isNotEmpty() }
 
-            val metaBuilder = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-            artist?.let { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
-            album?.let  { metaBuilder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
-            durationMs?.let { metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, it) }
-
-            // Set metadata and update the notification immediately without artwork so title/artist
-            // appear on the lock screen right away, without blocking on a network download.
-            session.setMetadata(metaBuilder.build())
+            // Apply to session immediately.
+            applySessionMetadata(context)
             if (mediaPlayer != null) updateSessionState()
-            AudioService.updateNotification(context, title, artist)
 
-            // Load artwork on a background thread and patch it in once available.
-            params.optString("artwork").takeIf { it.isNotEmpty() }?.let { artworkSrc ->
-                Thread {
-                    try {
-                        val bitmap: Bitmap? = if (artworkSrc.startsWith("http://") || artworkSrc.startsWith("https://")) {
-                            BitmapFactory.decodeStream(URL(artworkSrc).openStream())
-                        } else {
-                            BitmapFactory.decodeFile(artworkSrc)
-                        }
-                        bitmap?.let { bmp ->
-                            currentArtwork = bmp
-                            val updated = MediaMetadataCompat.Builder()
-                                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-                            artist?.let { updated.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it) }
-                            album?.let  { updated.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it) }
-                            durationMs?.let { updated.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, it) }
-                            updated.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bmp)
-                            Handler(Looper.getMainLooper()).post {
-                                session.setMetadata(updated.build())
-                                AudioService.updateNotification(context, title, artist)
-                            }
-                        }
-                    } catch (_: Exception) { /* artwork is optional — ignore fetch failures */ }
-                }.start()
+            // Only update the foreground service notification if playback is active.
+            // Starting the service before Play would show a notification with no audio.
+            if (mediaPlayer != null) {
+                AudioService.updateNotification(context, title, metaArtist)
             }
 
             return mapOf("success" to true)

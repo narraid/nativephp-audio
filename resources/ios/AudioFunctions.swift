@@ -2,46 +2,164 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 
-/**
- * AudioFunctions houses all BridgeFunction implementations for audio playback control
- * on iOS. Each inner class maps 1-to-1 with a PHP-side bridge call exposed by the
- * NativePHP audio-player plugin.
- *
- * A single shared AVPlayer instance is used across all functions so
- * that state (current track, position, volume) is preserved between calls.
- */
 enum AudioFunctions {
-    /** Shared AVPlayer instance. Nil when no track has been loaded. */
+
+    // MARK: - Player State
+
     private static var player: AVPlayer?
-    /** The currently active player item. */
     private static var playerItem: AVPlayerItem?
-    /** Observer token for the end-of-play event. */
+    private static var currentURL = ""
+
+    // MARK: - Stored Metadata (single source of truth for now-playing info)
+
+    private static var metaTitle: String?
+    private static var metaArtist: String?
+    private static var metaAlbum: String?
+    private static var metaDuration: Double?
+    private static var metaArtworkSource: String?
+
+    // MARK: - Observers
+
     private static var completionObserver: Any?
-    /** Observer token for playback failure. */
     private static var failureObserver: Any?
-    /** Guard so MPRemoteCommandCenter handlers are only registered once per process lifetime. */
-    private static var remoteCommandsRegistered = false
-    /** URL of the currently loaded track — used in remote-command events. */
-    private static var currentURL: String = ""
-    /** Observer token for AVAudioSession interruption events (calls, Siri, other apps). */
     private static var interruptionObserver: Any?
-    /** Observer token for audio route changes (headphones unplugged). */
     private static var routeChangeObserver: Any?
-    /** True when we paused due to an audio-focus interruption so we can auto-resume. */
-    private static var pausedByFocusLoss = false
-    /** Periodic time observer token for PlaybackProgressUpdated events. */
     private static var progressObserver: Any?
+
+    // MARK: - Flags
+
+    private static var remoteCommandsRegistered = false
+    private static var pausedByFocusLoss = false
+
+    // MARK: - Event Helpers
+
+    private static let eventPrefix = "Theunwindfront\\Audio\\Events\\"
+
+    private static func sendEvent(_ name: String, _ payload: [String: Any]) {
+        LaravelBridge.shared.send?(eventPrefix + name, payload)
+    }
+
+    private static func statePayload() -> [String: Any] {
+        ["position": positionSeconds(), "duration": durationSeconds(), "url": currentURL]
+    }
+
+    // MARK: - Position / Duration
+
+    private static func positionSeconds() -> Double {
+        let p = player?.currentTime().seconds ?? 0.0
+        return p.isNaN ? 0.0 : p
+    }
+
+    private static func durationSeconds() -> Double {
+        let d = playerItem?.duration.seconds ?? 0.0
+        return (d.isNaN || d.isInfinite) ? 0.0 : d
+    }
+
+    // MARK: - Audio Session
+
+    private static func activateAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default)
+        try? session.setActive(true)
+    }
+
+    private static func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    // MARK: - Now Playing Info
+
+    /**
+     * Rebuilds MPNowPlayingInfoCenter from stored metadata fields.
+     * Artwork is loaded asynchronously and patched in once available.
+     */
+    private static func refreshNowPlayingInfo() {
+        guard let title = metaTitle else { return }
+        var info: [String: Any] = [MPMediaItemPropertyTitle: title]
+        if let artist   = metaArtist   { info[MPMediaItemPropertyArtist]           = artist }
+        if let album    = metaAlbum    { info[MPMediaItemPropertyAlbumTitle]        = album }
+        if let duration = metaDuration { info[MPMediaItemPropertyPlaybackDuration]  = duration }
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = positionSeconds()
+        info[MPNowPlayingInfoPropertyPlaybackRate]        = player?.rate ?? 0.0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+
+        if let src = metaArtworkSource {
+            loadArtworkAsync(from: src)
+        }
+    }
+
+    /**
+     * Loads artwork from a URL or local file path on a background thread,
+     * then patches it into the existing nowPlayingInfo on the main thread.
+     */
+    private static func loadArtworkAsync(from source: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image: UIImage?
+            if let local = UIImage(contentsOfFile: source) {
+                image = local
+            } else if let url = URL(string: source),
+                      let data = try? Data(contentsOf: url) {
+                image = UIImage(data: data)
+            } else {
+                image = nil
+            }
+            guard let loaded = image else { return }
+            let artwork = MPMediaItemArtwork(boundsSize: loaded.size) { _ in loaded }
+            DispatchQueue.main.async {
+                var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                current[MPMediaItemPropertyArtwork] = artwork
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = current
+            }
+        }
+    }
+
+    /**
+     * Writes the current AVPlayer rate and elapsed time into the existing
+     * nowPlayingInfo so the lock-screen scrubber and play/pause icon stay in sync.
+     */
+    static func syncNowPlayingState() {
+        guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+        info[MPNowPlayingInfoPropertyPlaybackRate]        = player?.rate ?? 0.0
+        let elapsed = player?.currentTime().seconds ?? 0.0
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isNaN ? 0.0 : elapsed
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    // MARK: - Cleanup
+
+    private static func removeObservers() {
+        for observer in [completionObserver, failureObserver, interruptionObserver, routeChangeObserver] {
+            if let o = observer { NotificationCenter.default.removeObserver(o) }
+        }
+        completionObserver  = nil
+        failureObserver     = nil
+        interruptionObserver = nil
+        routeChangeObserver  = nil
+    }
+
+    /**
+     * Fully tears down the player: stops progress timer, releases the AVPlayer,
+     * removes all observers, deactivates the audio session, and clears nowPlayingInfo.
+     */
+    private static func resetPlayer() {
+        stopProgressTimer()
+        player?.pause()
+        player     = nil
+        playerItem = nil
+        removeObservers()
+        pausedByFocusLoss = false
+        deactivateAudioSession()
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+
+    // MARK: - Progress Timer
 
     static func startProgressTimer(interval: Double) {
         stopProgressTimer()
         guard interval > 0, let p = player else { return }
         let cmInterval = CMTime(seconds: interval, preferredTimescale: 600)
         progressObserver = p.addPeriodicTimeObserver(forInterval: cmInterval, queue: .main) { _ in
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated", [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ])
+            sendEvent("PlaybackProgressUpdated", statePayload())
         }
     }
 
@@ -52,31 +170,8 @@ enum AudioFunctions {
         }
     }
 
-    // MARK: - Position / duration helpers
+    // MARK: - Remote Command Centre
 
-    /** Current playback position in seconds, NaN-safe. */
-    private static func positionSeconds() -> Double {
-        let p = player?.currentTime().seconds ?? 0.0
-        return p.isNaN ? 0.0 : p
-    }
-
-    /** Total duration of the loaded item in seconds. Returns 0.0 for live/indefinite streams. */
-    private static func durationSeconds() -> Double {
-        let d = playerItem?.duration.seconds ?? 0.0
-        return (d.isNaN || d.isInfinite) ? 0.0 : d
-    }
-
-    // MARK: - Remote command centre
-
-    /**
-     * Registers hardware/lock-screen play, pause and toggle-play-pause commands once.
-     * Must be called after the AVAudioSession is activated so the system routes remote
-     * events to this app.
-     *
-     * On iOS the system automatically shows the registered app's now-playing info on the
-     * lock screen / Control Center, and tapping that UI brings the app to the foreground —
-     * no extra "tap to open" code is required.
-     */
     static func setupRemoteCommands() {
         guard !remoteCommandsRegistered else { return }
         remoteCommandsRegistered = true
@@ -85,91 +180,67 @@ enum AudioFunctions {
 
         center.playCommand.isEnabled = true
         center.playCommand.addTarget { _ in
-            guard AudioFunctions.player != nil else { return .noSuchContent }
-            AudioFunctions.player?.play()
-            AudioFunctions.syncNowPlayingState()
-            let payload: [String: Any] = [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ]
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
+            guard player != nil else { return .noSuchContent }
+            player?.play()
+            syncNowPlayingState()
+            let payload = statePayload()
+            sendEvent("PlaybackResumed",    payload)
+            sendEvent("RemotePlayReceived", payload)
             return .success
         }
 
         center.pauseCommand.isEnabled = true
         center.pauseCommand.addTarget { _ in
-            guard AudioFunctions.player != nil else { return .noSuchContent }
-            AudioFunctions.player?.pause()
-            AudioFunctions.syncNowPlayingState()
-            let payload: [String: Any] = [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ]
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
+            guard player != nil else { return .noSuchContent }
+            player?.pause()
+            syncNowPlayingState()
+            let payload = statePayload()
+            sendEvent("PlaybackPaused",      payload)
+            sendEvent("RemotePauseReceived", payload)
             return .success
         }
 
         center.togglePlayPauseCommand.isEnabled = true
         center.togglePlayPauseCommand.addTarget { _ in
-            guard let player = AudioFunctions.player else { return .noSuchContent }
-            let payload: [String: Any] = [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ]
-            if player.rate > 0 {
-                player.pause()
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePauseReceived", payload)
+            guard let p = player else { return .noSuchContent }
+            let payload = statePayload()
+            if p.rate > 0 {
+                p.pause()
+                sendEvent("PlaybackPaused",      payload)
+                sendEvent("RemotePauseReceived", payload)
             } else {
-                player.play()
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePlayReceived", payload)
+                p.play()
+                sendEvent("PlaybackResumed",    payload)
+                sendEvent("RemotePlayReceived", payload)
             }
-            AudioFunctions.syncNowPlayingState()
+            syncNowPlayingState()
             return .success
         }
 
         center.nextTrackCommand.isEnabled = true
         center.nextTrackCommand.addTarget { _ in
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived", [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ])
+            sendEvent("RemoteNextTrackReceived", statePayload())
             return .success
         }
 
         center.previousTrackCommand.isEnabled = true
         center.previousTrackCommand.addTarget { _ in
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived", [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ])
+            sendEvent("RemotePreviousTrackReceived", statePayload())
             return .success
         }
 
         center.changePlaybackPositionCommand.isEnabled = true
         center.changePlaybackPositionCommand.addTarget { event in
-            guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+            guard let posEvent = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
             }
-            let seekTo = positionEvent.positionTime
-            let from = AudioFunctions.positionSeconds()
-            let duration = AudioFunctions.durationSeconds()
-            let time = CMTime(seconds: seekTo, preferredTimescale: 1000)
-            AudioFunctions.player?.seek(to: time) { _ in
-                AudioFunctions.syncNowPlayingState()
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteSeekReceived", [
-                    "position": from,
-                    "duration": duration,
-                    "url": AudioFunctions.currentURL,
-                    "seekTo": seekTo
+            let seekTo   = posEvent.positionTime
+            let from     = positionSeconds()
+            let duration = durationSeconds()
+            player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) { _ in
+                syncNowPlayingState()
+                sendEvent("RemoteSeekReceived", [
+                    "position": from, "duration": duration, "url": currentURL, "seekTo": seekTo
                 ])
             }
             return .success
@@ -177,88 +248,51 @@ enum AudioFunctions {
 
         center.stopCommand.isEnabled = true
         center.stopCommand.addTarget { _ in
-            guard AudioFunctions.player != nil else { return .noSuchContent }
-            let payload: [String: Any] = [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ]
-            AudioFunctions.stopProgressTimer()
-            AudioFunctions.player?.pause()
-            AudioFunctions.player = nil
-            AudioFunctions.playerItem = nil
-            for observer in [AudioFunctions.completionObserver, AudioFunctions.failureObserver,
-                             AudioFunctions.interruptionObserver, AudioFunctions.routeChangeObserver] {
-                if let o = observer { NotificationCenter.default.removeObserver(o) }
-            }
-            AudioFunctions.completionObserver = nil
-            AudioFunctions.failureObserver = nil
-            AudioFunctions.interruptionObserver = nil
-            AudioFunctions.routeChangeObserver = nil
-            AudioFunctions.pausedByFocusLoss = false
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", payload)
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\RemoteStopReceived", payload)
+            guard player != nil else { return .noSuchContent }
+            let payload = statePayload()
+            resetPlayer()
+            sendEvent("PlaybackStopped",      payload)
+            sendEvent("RemoteStopReceived",   payload)
             return .success
         }
     }
 
-    // MARK: - Audio session observers (interruptions + route changes)
+    // MARK: - Audio Session Observers (interruptions + route changes)
 
-    /**
-     * Registers AVAudioSession observers for interruptions (phone calls, Siri, other apps stealing
-     * focus) and route changes (headphones unplugged). Safe to call multiple times — registers once.
-     *
-     * Interruption began  → auto-pause + fire AudioFocusLostTransient + PlaybackPaused.
-     * Interruption ended  → fire AudioFocusGained; auto-resume when .shouldResume is set.
-     * Headphones unplugged → pause + fire AudioFocusLostTransient + PlaybackPaused.
-     */
     private static func setupAudioSessionObservers() {
         guard interruptionObserver == nil else { return }
 
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
-            object: nil,
-            queue: .main
+            object: nil, queue: .main
         ) { notification in
             guard let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
 
             switch type {
             case .began:
-                guard AudioFunctions.player != nil else { return }
-                if AudioFunctions.player?.rate ?? 0 > 0 {
-                    AudioFunctions.pausedByFocusLoss = true
-                    AudioFunctions.player?.pause()
-                    AudioFunctions.syncNowPlayingState()
-                    let payload: [String: Any] = [
-                        "position": AudioFunctions.positionSeconds(),
-                        "duration": AudioFunctions.durationSeconds(),
-                        "url": AudioFunctions.currentURL
-                    ]
-                    LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-                    LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
-                }
+                guard player != nil, player?.rate ?? 0 > 0 else { return }
+                pausedByFocusLoss = true
+                player?.pause()
+                syncNowPlayingState()
+                let payload = statePayload()
+                sendEvent("PlaybackPaused",          payload)
+                sendEvent("AudioFocusLostTransient", payload)
 
             case .ended:
-                let optionsValue = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
-                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                let payload: [String: Any] = [
-                    "position": AudioFunctions.positionSeconds(),
-                    "duration": AudioFunctions.durationSeconds(),
-                    "url": AudioFunctions.currentURL
-                ]
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusGained", payload)
-
-                if options.contains(.shouldResume) && AudioFunctions.pausedByFocusLoss {
-                    AudioFunctions.pausedByFocusLoss = false
+                let opts = AVAudioSession.InterruptionOptions(
+                    rawValue: notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                )
+                let payload = statePayload()
+                sendEvent("AudioFocusGained", payload)
+                if opts.contains(.shouldResume) && pausedByFocusLoss {
+                    pausedByFocusLoss = false
                     try? AVAudioSession.sharedInstance().setActive(true)
-                    AudioFunctions.player?.play()
-                    AudioFunctions.syncNowPlayingState()
-                    LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", payload)
+                    player?.play()
+                    syncNowPlayingState()
+                    sendEvent("PlaybackResumed", payload)
                 } else {
-                    AudioFunctions.pausedByFocusLoss = false
+                    pausedByFocusLoss = false
                 }
 
             @unknown default:
@@ -266,54 +300,25 @@ enum AudioFunctions {
             }
         }
 
-        // Headphones unplugged — pause to prevent unexpected speaker playback
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
-            object: nil,
-            queue: .main
+            object: nil, queue: .main
         ) { notification in
             guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                   let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue),
                   reason == .oldDeviceUnavailable,
-                  AudioFunctions.player != nil,
-                  AudioFunctions.player?.rate ?? 0 > 0 else { return }
+                  player != nil, player?.rate ?? 0 > 0 else { return }
 
-            AudioFunctions.player?.pause()
-            AudioFunctions.syncNowPlayingState()
-            let payload: [String: Any] = [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ]
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", payload)
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\AudioFocusLostTransient", payload)
+            player?.pause()
+            syncNowPlayingState()
+            let payload = statePayload()
+            sendEvent("PlaybackPaused",          payload)
+            sendEvent("AudioFocusLostTransient", payload)
         }
     }
 
-    /**
-     * Writes the current AVPlayer rate and elapsed time back into MPNowPlayingInfoCenter.
-     * Call this after any play/pause state change so the lock-screen scrubber and
-     * play/pause button icon stay in sync with the actual player state.
-     */
-    static func syncNowPlayingState() {
-        guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-        let rate   = AudioFunctions.player?.rate ?? 0.0
-        let elapsed = AudioFunctions.player?.currentTime().seconds ?? 0.0
-        info[MPNowPlayingInfoPropertyPlaybackRate]      = rate
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isNaN ? 0.0 : elapsed
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-    }
+    // MARK: - Bridge Functions
 
-    /**
-     * Starts playback of a remote or local audio URL.
-     *
-     * Expected parameters:
-     *  - `url` (String, required) – the URI of the audio resource to play.
-     *
-     * On success fires [PlaybackStarted]. On completion fires [PlaybackCompleted].
-     * On error fires [PlaybackFailed].
-     * Returns a BridgeResponse error when `url` is missing or invalid.
-     */
     class Play: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             guard let urlString = parameters["url"] as? String,
@@ -321,249 +326,132 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
 
-            // Optional metadata — included in PlaybackStarted and used to populate
-            // lock screen / Bluetooth controls immediately without a separate setMetadata call.
             let title    = parameters["title"]    as? String
             let artist   = parameters["artist"]   as? String
             let album    = parameters["album"]    as? String
             let artwork  = parameters["artwork"]  as? String
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
 
-            // Cleanup previous observers if any
-            if let observer = AudioFunctions.completionObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
-            if let observer = AudioFunctions.failureObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
+            // Clean up previous observers
+            if let o = AudioFunctions.completionObserver { NotificationCenter.default.removeObserver(o) }
+            if let o = AudioFunctions.failureObserver    { NotificationCenter.default.removeObserver(o) }
 
-            // Configure the audio session for background playback before creating the player.
-            // .playback category allows audio to continue when the screen locks or the
-            // app moves to the background. This must be set before AVPlayer starts.
-            let session = AVAudioSession.sharedInstance()
-            try? session.setCategory(.playback, mode: .default)
-            try? session.setActive(true)
-
-            // Register lock-screen / Bluetooth remote-control command handlers
+            AudioFunctions.activateAudioSession()
             AudioFunctions.setupRemoteCommands()
-
-            // Register audio session observers for interruptions and route changes
             AudioFunctions.setupAudioSessionObservers()
 
             AudioFunctions.currentURL = urlString
-            AudioFunctions.playerItem = AVPlayerItem(url: url)
-            AudioFunctions.player = AVPlayer(playerItem: AudioFunctions.playerItem)
 
-            // Apply metadata to MPNowPlayingInfoCenter immediately if provided.
-            // Artwork is loaded asynchronously so the player is not blocked waiting for
-            // a network download before nowPlayingInfo is set.
-            if let title = title {
-                var info: [String: Any] = [:]
-                info[MPMediaItemPropertyTitle] = title
-                if let artist   = artist   { info[MPMediaItemPropertyArtist]       = artist }
-                if let album    = album    { info[MPMediaItemPropertyAlbumTitle]    = album }
-                if let duration = duration { info[MPMediaItemPropertyPlaybackDuration] = duration }
-                info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = 0.0
-                info[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-
-                if let artworkString = artwork {
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        var loaded: MPMediaItemArtwork? = nil
-                        if let image = UIImage(contentsOfFile: artworkString) {
-                            loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                        } else if let artUrl = URL(string: artworkString),
-                                  let data = try? Data(contentsOf: artUrl),
-                                  let image = UIImage(data: data) {
-                            loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                        }
-                        if let artwork = loaded {
-                            DispatchQueue.main.async {
-                                var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-                                current[MPMediaItemPropertyArtwork] = artwork
-                                MPNowPlayingInfoCenter.default().nowPlayingInfo = current
-                            }
-                        }
-                    }
-                }
+            // Store inline metadata if provided; otherwise preserve metadata from a prior setMetadata call.
+            if title != nil {
+                AudioFunctions.metaTitle         = title
+                AudioFunctions.metaArtist        = artist
+                AudioFunctions.metaAlbum         = album
+                AudioFunctions.metaDuration      = duration
+                AudioFunctions.metaArtworkSource = artwork
             }
 
-            // Add completion observer
+            AudioFunctions.playerItem = AVPlayerItem(url: url)
+            AudioFunctions.player     = AVPlayer(playerItem: AudioFunctions.playerItem)
+
+            // Apply stored metadata to lock screen / Control Center.
+            AudioFunctions.refreshNowPlayingInfo()
+
+            // Completion observer
             AudioFunctions.completionObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
-                object: AudioFunctions.playerItem,
-                queue: .main
+                object: AudioFunctions.playerItem, queue: .main
             ) { _ in
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackCompleted", [
-                    "url": urlString,
-                    "duration": AudioFunctions.durationSeconds()
+                AudioFunctions.sendEvent("PlaybackCompleted", [
+                    "url": urlString, "duration": AudioFunctions.durationSeconds()
                 ])
             }
 
-            // Add failure observer
+            // Failure observer
             AudioFunctions.failureObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemFailedToPlayToEndTime,
-                object: AudioFunctions.playerItem,
-                queue: .main
+                object: AudioFunctions.playerItem, queue: .main
             ) { notification in
                 let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
                     .localizedDescription ?? "Unknown error"
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackFailed", [
-                    "url": urlString,
-                    "error": error
-                ])
+                AudioFunctions.sendEvent("PlaybackFailed", ["url": urlString, "error": error])
             }
 
             AudioFunctions.player?.play()
+            // Sync rate/elapsed after play() so the lock screen shows the correct state.
+            AudioFunctions.syncNowPlayingState()
 
             var startedPayload: [String: Any] = ["url": urlString]
-            if let title    = title    { startedPayload["title"]    = title }
-            if let artist   = artist   { startedPayload["artist"]   = artist }
-            if let album    = album    { startedPayload["album"]    = album }
-            if let duration = duration { startedPayload["duration"] = duration }
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStarted", startedPayload)
+            if let t = title    { startedPayload["title"]    = t }
+            if let a = artist   { startedPayload["artist"]   = a }
+            if let a = album    { startedPayload["album"]    = a }
+            if let d = duration { startedPayload["duration"] = d }
+            AudioFunctions.sendEvent("PlaybackStarted", startedPayload)
 
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
-    /**
-     * Pauses the currently playing audio without releasing the AVPlayer.
-     * Fires [PlaybackPaused] with the current position and duration.
-     */
     class Pause: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.pause()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackPaused", [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ])
+            AudioFunctions.sendEvent("PlaybackPaused", AudioFunctions.statePayload())
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
-    /**
-     * Resumes a previously paused AVPlayer.
-     * Fires [PlaybackResumed] with the current position and duration.
-     */
     class Resume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.play()
             AudioFunctions.syncNowPlayingState()
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackResumed", [
-                "position": AudioFunctions.positionSeconds(),
-                "duration": AudioFunctions.durationSeconds(),
-                "url": AudioFunctions.currentURL
-            ])
+            AudioFunctions.sendEvent("PlaybackResumed", AudioFunctions.statePayload())
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
-    /**
-     * Stops playback and fully releases the AVPlayer state.
-     * After this call player is nil and a new Play call is required to resume audio.
-     * Fires [PlaybackStopped] with the position and duration captured before release.
-     */
     class Stop: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            // Capture state before releasing the player
-            let position = AudioFunctions.positionSeconds()
-            let duration = AudioFunctions.durationSeconds()
-
-            AudioFunctions.stopProgressTimer()
-            AudioFunctions.player?.pause()
-            AudioFunctions.player = nil
-            AudioFunctions.playerItem = nil
-            if let observer = AudioFunctions.completionObserver {
-                NotificationCenter.default.removeObserver(observer)
-                AudioFunctions.completionObserver = nil
-            }
-            if let observer = AudioFunctions.failureObserver {
-                NotificationCenter.default.removeObserver(observer)
-                AudioFunctions.failureObserver = nil
-            }
-            if let observer = AudioFunctions.interruptionObserver {
-                NotificationCenter.default.removeObserver(observer)
-                AudioFunctions.interruptionObserver = nil
-            }
-            if let observer = AudioFunctions.routeChangeObserver {
-                NotificationCenter.default.removeObserver(observer)
-                AudioFunctions.routeChangeObserver = nil
-            }
-            AudioFunctions.pausedByFocusLoss = false
-            // Deactivate the session so other apps can resume their audio
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-            LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackStopped", [
-                "position": position,
-                "duration": duration,
-                "url": AudioFunctions.currentURL
-            ])
+            let payload = AudioFunctions.statePayload()
+            AudioFunctions.resetPlayer()
+            AudioFunctions.sendEvent("PlaybackStopped", payload)
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
-    /**
-     * Seeks the playback position to the given number of seconds.
-     * Fires [PlaybackSeeked] with from, to, and duration once the seek completes.
-     *
-     * Expected parameters:
-     *  - `seconds` (Number, optional, default 0) – target position in seconds.
-     */
     class Seek: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let seconds = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
-            let from = AudioFunctions.positionSeconds()
+            let seconds  = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
+            let from     = AudioFunctions.positionSeconds()
             let duration = AudioFunctions.durationSeconds()
-            let time = CMTime(seconds: seconds, preferredTimescale: 600)
-            AudioFunctions.player?.seek(to: time) { _ in
-                LaravelBridge.shared.send?("Theunwindfront\\Audio\\Events\\PlaybackSeeked", [
-                    "from": from,
-                    "to": seconds,
-                    "duration": duration,
-                    "url": AudioFunctions.currentURL
+            AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
+                AudioFunctions.sendEvent("PlaybackSeeked", [
+                    "from": from, "to": seconds, "duration": duration, "url": AudioFunctions.currentURL
                 ])
             }
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
-    /**
-     * Sets the playback volume.
-     *
-     * Expected parameters:
-     *  - `level` (Number, optional, default 1.0) – volume level in the range [0.0, 1.0].
-     */
     class SetVolume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let level = (parameters["level"] as? NSNumber)?.floatValue ?? 1.0
-            AudioFunctions.player?.volume = level
+            AudioFunctions.player?.volume = (parameters["level"] as? NSNumber)?.floatValue ?? 1.0
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
-    /**
-     * Returns the total duration of the currently loaded track in seconds.
-     * Returns `0.0` when no track is loaded.
-     */
     class GetDuration: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let duration = AudioFunctions.playerItem?.duration.seconds ?? 0.0
-            // nan represents duration not being available/loaded yet
-            let validDuration = duration.isNaN ? 0.0 : duration
-            return BridgeResponse.success(data: ["duration": validDuration])
+            return BridgeResponse.success(data: ["duration": AudioFunctions.durationSeconds()])
         }
     }
 
-    /**
-     * Sets the interval at which PlaybackProgressUpdated events are fired.
-     * Pass 0 to disable progress events.
-     *
-     * Expected parameters:
-     *  - `seconds` (Number, optional, default 0) – interval in seconds (0 = disabled).
-     */
+    class GetCurrentPosition: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            return BridgeResponse.success(data: ["position": AudioFunctions.positionSeconds()])
+        }
+    }
+
     class SetProgressInterval: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let seconds = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
@@ -573,27 +461,11 @@ enum AudioFunctions {
     }
 
     /**
-     * Returns the current playback position in seconds.
-     * Returns `0.0` when no track is loaded.
-     */
-    class GetCurrentPosition: BridgeFunction {
-        func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let position = AudioFunctions.player?.currentTime().seconds ?? 0.0
-            let validPosition = position.isNaN ? 0.0 : position
-            return BridgeResponse.success(data: ["position": validPosition])
-        }
-    }
-
-    /**
      * Sets track metadata on MPNowPlayingInfoCenter for display on lock screens,
      * Control Center, Bluetooth devices, and CarPlay.
      *
-     * Expected parameters:
-     *  - `title`    (String, required) – track title.
-     *  - `artist`   (String, optional) – artist name.
-     *  - `album`    (String, optional) – album name.
-     *  - `artwork`  (String, optional) – URL or local path of the artwork image.
-     *  - `duration` (Number, optional) – total duration in seconds.
+     * Safe to call before Play — metadata is stored and applied when Play starts.
+     * Safe to call after Play — lock screen updates immediately.
      */
     class SetMetadata: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
@@ -601,58 +473,19 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "title is required.")
             }
 
-            // Build the info dictionary on the current (PHP worker) thread.
-            // Artwork loading may involve a blocking network call so we keep it here
-            // rather than on the main thread.
-            var info: [String: Any] = [:]
-            info[MPMediaItemPropertyTitle] = title
+            // Replace all stored metadata (nil fields are intentionally cleared).
+            AudioFunctions.metaTitle         = title
+            AudioFunctions.metaArtist        = parameters["artist"]   as? String
+            AudioFunctions.metaAlbum         = parameters["album"]    as? String
+            AudioFunctions.metaDuration      = (parameters["duration"] as? NSNumber)?.doubleValue
+            AudioFunctions.metaArtworkSource = parameters["artwork"]  as? String
 
-            if let artist = parameters["artist"] as? String {
-                info[MPMediaItemPropertyArtist] = artist
-            }
-            if let album = parameters["album"] as? String {
-                info[MPMediaItemPropertyAlbumTitle] = album
-            }
-            if let duration = (parameters["duration"] as? NSNumber)?.doubleValue {
-                info[MPMediaItemPropertyPlaybackDuration] = duration
-            }
-
-            // Snapshot player state before crossing to the main thread.
-            let elapsed = AudioFunctions.player?.currentTime().seconds ?? 0.0
-            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isNaN ? 0.0 : elapsed
-            info[MPNowPlayingInfoPropertyPlaybackRate] = AudioFunctions.player?.rate ?? 0.0
-
-            // Dispatch title/artist/album to the main thread immediately so the lock screen
-            // shows them without waiting for artwork. Artwork is loaded on a background thread
-            // and patched in once available — a blocking Data(contentsOf:) call here would
-            // delay the entire nowPlayingInfo update until the download finishes.
-            let infoWithoutArtwork = info
+            // Ensure the audio session and remote commands are ready so the lock screen
+            // shows metadata even before Play is called.
             DispatchQueue.main.async {
-                let session = AVAudioSession.sharedInstance()
-                try? session.setCategory(.playback, mode: .default)
-                try? session.setActive(true)
+                AudioFunctions.activateAudioSession()
                 AudioFunctions.setupRemoteCommands()
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = infoWithoutArtwork
-            }
-
-            if let artworkString = parameters["artwork"] as? String {
-                DispatchQueue.global(qos: .userInitiated).async {
-                    var loaded: MPMediaItemArtwork? = nil
-                    if let image = UIImage(contentsOfFile: artworkString) {
-                        loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                    } else if let url = URL(string: artworkString),
-                              let data = try? Data(contentsOf: url),
-                              let image = UIImage(data: data) {
-                        loaded = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                    }
-                    if let artwork = loaded {
-                        DispatchQueue.main.async {
-                            var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-                            current[MPMediaItemPropertyArtwork] = artwork
-                            MPNowPlayingInfoCenter.default().nowPlayingInfo = current
-                        }
-                    }
-                }
+                AudioFunctions.refreshNowPlayingInfo()
             }
 
             return BridgeResponse.success(data: ["success": true])

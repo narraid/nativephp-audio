@@ -395,4 +395,40 @@ Android (AudioFunctions.kt — SetMetadata):
   │ AudioFunctions.kt    │ SetMetadata.execute()                  │                                                                                                                                                       
   ├──────────────────────┼────────────────────────────────────────┤                                                                                                                                                       
   │ AudioFunctions.kt    │ Play.execute() (inline metadata block) │
-  └──────────────────────┴────────────────────────────────────────┘         
+  └──────────────────────┴────────────────────────────────────────┘     
+
+
+Refactoring Summary
+
+Extracted Helpers (both platforms)
+
+- sendEvent(name, payload) - auto-prefixes event names, eliminating "Theunwindfront\\Audio\\Events\\" repeated ~15 times
+- statePayload() - builds the common position/duration/url dictionary, was copy-pasted ~15 times
+- loadArtworkAsync() - shared artwork loading logic, was duplicated between Play and SetMetadata
+
+Swift-specific
+
+- refreshNowPlayingInfo() - single source of truth for building nowPlayingInfo from stored metadata
+- removeObservers() - centralized observer cleanup (was duplicated in Stop + remote stop handler)
+- resetPlayer() - full teardown in one call (was 15+ lines duplicated in Stop + remote stop)
+- activateAudioSession() / deactivateAudioSession() - extracted repeated session setup
+
+Kotlin-specific
+
+- buildSessionMetadata() - single source of truth for MediaMetadataCompat (was duplicated in Play + SetMetadata)
+- applySessionMetadata(context) - sets session metadata + triggers async artwork loading
+- releasePlayer() - centralized cleanup (was duplicated in Stop + remote stop callback)
+
+SetMetadata-first fix
+
+- Both platforms: Metadata is now stored in static properties (metaTitle, metaArtist, etc.) as a shared source of truth
+- iOS: Play without inline metadata now preserves prior SetMetadata data. syncNowPlayingState() is called after play() so the lock screen rate updates correctly
+- Android: SetMetadata no longer starts the foreground service when mediaPlayer is null. Play uses stored metadata for the service notification title/artist instead of relying on AudioService.currentTitle
+
+Line count reduction
+
+- Swift: 662 -> 494 lines (-25%)
+- Kotlin AudioFunctions: 597 -> 535 lines (-10%)
+- AudioService.kt: unchanged (already clean)
+
+✻ Brewed for 2m 20s                
