@@ -371,50 +371,60 @@ class AudioFunctions {
                     metaArtworkSource = artwork
                 }
 
-                // Apply stored metadata to MediaSession (covers both inline and prior setMetadata).
-                if (metaTitle != null) {
-                    applySessionMetadata(activity)
-                }
-
-                mediaPlayer = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .build()
-                    )
-                    setDataSource(activity, Uri.parse(url))
-
-                    setOnPreparedListener { mp ->
-                        requestAudioFocus(activity)
-                        mp.start()
-                        updateSessionState()
-                        // Use stored metadata for service notification, falling back to defaults.
-                        val serviceTitle  = metaTitle ?: "Now Playing"
-                        val serviceArtist = metaArtist
-                        AudioService.start(activity, serviceTitle, serviceArtist)
-                        val payload = mutableMapOf<String, Any>("url" to url)
-                        title?.let    { payload["title"]    = it }
-                        artist?.let   { payload["artist"]   = it }
-                        album?.let    { payload["album"]    = it }
-                        duration?.let { payload["duration"] = it }
-                        sendEvent("PlaybackStarted", payload)
+                // MediaPlayer must be created on a thread with a Looper so it can deliver
+                // onPrepared / onCompletion / onError callbacks via its internal Handler.
+                Handler(Looper.getMainLooper()).post {
+                    // Apply stored metadata to MediaSession (covers both inline and prior setMetadata).
+                    if (metaTitle != null) {
+                        applySessionMetadata(activity)
                     }
 
-                    setOnCompletionListener {
-                        sendEvent("PlaybackCompleted", mapOf(
-                            "url" to currentUrl, "duration" to durationSeconds()
-                        ))
-                    }
+                    try {
+                        mediaPlayer = MediaPlayer().apply {
+                            setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                                    .build()
+                            )
+                            setDataSource(activity, Uri.parse(url))
 
-                    setOnErrorListener { _, what, extra ->
+                            setOnPreparedListener { mp ->
+                                requestAudioFocus(activity)
+                                mp.start()
+                                updateSessionState()
+                                // Use stored metadata for service notification, falling back to defaults.
+                                val serviceTitle  = metaTitle ?: "Now Playing"
+                                val serviceArtist = metaArtist
+                                AudioService.start(activity, serviceTitle, serviceArtist)
+                                val payload = mutableMapOf<String, Any>("url" to url)
+                                title?.let    { payload["title"]    = it }
+                                artist?.let   { payload["artist"]   = it }
+                                album?.let    { payload["album"]    = it }
+                                duration?.let { payload["duration"] = it }
+                                sendEvent("PlaybackStarted", payload)
+                            }
+
+                            setOnCompletionListener {
+                                sendEvent("PlaybackCompleted", mapOf(
+                                    "url" to currentUrl, "duration" to durationSeconds()
+                                ))
+                            }
+
+                            setOnErrorListener { _, what, extra ->
+                                sendEvent("PlaybackFailed", mapOf(
+                                    "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
+                                ))
+                                false
+                            }
+
+                            prepareAsync()
+                        }
+                    } catch (e: Exception) {
                         sendEvent("PlaybackFailed", mapOf(
-                            "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
+                            "url" to url, "error" to (e.message ?: "Unknown error")
                         ))
-                        false
                     }
-
-                    prepareAsync()
                 }
 
                 mapOf("success" to true)
