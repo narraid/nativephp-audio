@@ -16,6 +16,8 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.fragment.app.FragmentActivity
 import com.nativephp.mobile.bridge.BridgeFunction
+import com.nativephp.mobile.lifecycle.NativePHPLifecycle
+import com.nativephp.mobile.ui.MainActivity
 import com.nativephp.mobile.utils.NativeActionCoordinator
 import org.json.JSONObject
 import java.lang.ref.WeakReference
@@ -48,6 +50,26 @@ class AudioFunctions {
         // ── Progress Timer ────────────────────────────────────────────────────
         private var progressHandler: Handler? = null
         private var progressRunnable: Runnable? = null
+        private var progressIntervalMs: Long = 0
+
+        // ── Lifecycle ─────────────────────────────────────────────────────────
+
+        init {
+            // When the app returns to foreground: refresh the activity reference so events
+            // can be dispatched safely, and restart the progress timer if audio is playing.
+            NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_RESUME) { _ ->
+                MainActivity.instance?.let { activityRef = WeakReference(it) }
+                if (mediaPlayer?.isPlaying == true && progressIntervalMs > 0) {
+                    startProgressTimer(progressIntervalMs)
+                }
+            }
+            // When the app backgrounds: stop the progress timer. NativeActionCoordinator
+            // calls commitNow() on the fragment manager which throws IllegalStateException
+            // after onSaveInstanceState — dispatching events while paused is unsafe.
+            NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_PAUSE) { _ ->
+                stopProgressTimer()
+            }
+        }
 
         // ── Event Helpers ─────────────────────────────────────────────────────
 
@@ -55,6 +77,7 @@ class AudioFunctions {
 
         internal fun sendEvent(name: String, payload: Map<String, Any>) {
             val activity = activityRef?.get() ?: return
+            if (activity.isDestroyed || activity.isFinishing) return
             val json = JSONObject(payload).toString()
             Handler(Looper.getMainLooper()).post {
                 NativeActionCoordinator.dispatchEvent(activity, EVENT_PREFIX + name, json)
@@ -303,6 +326,7 @@ class AudioFunctions {
         // ── Progress Timer ────────────────────────────────────────────────────
 
         fun startProgressTimer(intervalMs: Long) {
+            progressIntervalMs = intervalMs
             stopProgressTimer()
             if (intervalMs <= 0) return
             val handler = Handler(Looper.getMainLooper())

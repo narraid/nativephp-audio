@@ -93,9 +93,10 @@
 
     "ios": {
         "min_version": "13.0",
+        "init_function": "AudioFunctions.setupAudioSession",
+        "background_modes": ["audio"],
         "info_plist": {
-            "NSAppleMusicUsageDescription": "We need access to your music library to play audio files.",
-            "UIBackgroundModes": ["audio"]
+            "NSAppleMusicUsageDescription": "We need access to your music library to play audio files."
         },
         "dependencies": {
             "swift_packages": [],

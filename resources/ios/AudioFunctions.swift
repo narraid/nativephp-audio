@@ -55,6 +55,21 @@ enum AudioFunctions {
         return (d.isNaN || d.isInfinite) ? 0.0 : d
     }
 
+    // MARK: - Plugin Initialization
+
+    /**
+     * Called by NativePHP at app launch (registered via nativephp.json init_function).
+     * Configures the AVAudioSession with the .playback category so that audio continues
+     * in the background as soon as the app starts — matching the AppDelegate-level
+     * setup used in the reference implementation.
+     */
+    static func setupAudioSession() {
+        NativePHPPluginRegistry.shared.registerOnAppLaunch("Audio") {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
+    }
+
     // MARK: - Audio Session
 
     private static func activateAudioSession() {
