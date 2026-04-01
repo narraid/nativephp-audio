@@ -5,6 +5,48 @@ namespace Theunwindfront\Audio;
 class Audio
 {
     /**
+     * Load an audio file without starting playback.
+     * The audio is prepared and ready to play via resume().
+     * Fires a PlaybackLoaded event once the audio is ready.
+     *
+     * @param  string       $url      URL or local path of the audio file
+     * @param  string|null  $title    Track title
+     * @param  string|null  $artist   Artist name
+     * @param  string|null  $album    Album name
+     * @param  string|null  $artwork  URL or local path to artwork image
+     * @param  float|null   $duration Total track duration in seconds
+     */
+    public function load(
+        string $url,
+        ?string $title = null,
+        ?string $artist = null,
+        ?string $album = null,
+        ?string $artwork = null,
+        ?float $duration = null,
+    ): bool {
+        if (function_exists('nativephp_call')) {
+            $params = array_filter([
+                'url'      => $url,
+                'title'    => $title,
+                'artist'   => $artist,
+                'album'    => $album,
+                'artwork'  => $artwork,
+                'duration' => $duration,
+            ], fn ($v) => $v !== null);
+
+            $result = nativephp_call('Audio.load', json_encode($params));
+
+            if ($result) {
+                $decoded = json_decode($result);
+
+                return $decoded->success ?? false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Play an audio file from a URL or local path.
      * Optionally pass track metadata so PlaybackStarted fires with a complete payload
      * and the lock screen / Bluetooth controls are populated immediately.

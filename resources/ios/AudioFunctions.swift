@@ -338,6 +338,88 @@ enum AudioFunctions {
 
     // MARK: - Bridge Functions
 
+    /**
+     * Shared helper that sets up the AVPlayer with a URL and metadata
+     * but does NOT start playback. Used by both Load and Play.
+     */
+    private static func preparePlayer(urlString: String, url: URL, title: String?, artist: String?, album: String?, artwork: String?, duration: Double?) {
+        // Clean up previous observers
+        if let o = completionObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = failureObserver    { NotificationCenter.default.removeObserver(o) }
+
+        activateAudioSession()
+        setupRemoteCommands()
+        setupAudioSessionObservers()
+
+        currentURL = urlString
+
+        // Store inline metadata if provided; otherwise preserve metadata from a prior setMetadata call.
+        if title != nil {
+            metaTitle         = title
+            metaArtist        = artist
+            metaAlbum         = album
+            metaDuration      = duration
+            metaArtworkSource = artwork
+        }
+
+        playerItem = AVPlayerItem(url: url)
+        player     = AVPlayer(playerItem: playerItem)
+
+        // Apply stored metadata to lock screen / Control Center.
+        refreshNowPlayingInfo()
+
+        // Completion observer
+        completionObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem, queue: .main
+        ) { _ in
+            stopProgressTimer()
+            sendEvent("PlaybackCompleted", [
+                "url": urlString, "duration": durationSeconds()
+            ])
+        }
+
+        // Failure observer
+        failureObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: playerItem, queue: .main
+        ) { notification in
+            stopProgressTimer()
+            let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
+                .localizedDescription ?? "Unknown error"
+            sendEvent("PlaybackFailed", ["url": urlString, "error": error])
+        }
+    }
+
+    class Load: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let urlString = parameters["url"] as? String,
+                  let url = URL(string: urlString) else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
+            }
+
+            let title    = parameters["title"]    as? String
+            let artist   = parameters["artist"]   as? String
+            let album    = parameters["album"]    as? String
+            let artwork  = parameters["artwork"]  as? String
+            let duration = (parameters["duration"] as? NSNumber)?.doubleValue
+
+            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration)
+
+            // Do NOT call player?.play() — audio is loaded but paused.
+            AudioFunctions.syncNowPlayingState()
+
+            var loadedPayload: [String: Any] = ["url": urlString]
+            if let t = title    { loadedPayload["title"]    = t }
+            if let a = artist   { loadedPayload["artist"]   = a }
+            if let a = album    { loadedPayload["album"]    = a }
+            if let d = duration { loadedPayload["duration"] = d }
+            AudioFunctions.sendEvent("PlaybackLoaded", loadedPayload)
+
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
     class Play: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             guard let urlString = parameters["url"] as? String,
@@ -351,52 +433,7 @@ enum AudioFunctions {
             let artwork  = parameters["artwork"]  as? String
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
 
-            // Clean up previous observers
-            if let o = AudioFunctions.completionObserver { NotificationCenter.default.removeObserver(o) }
-            if let o = AudioFunctions.failureObserver    { NotificationCenter.default.removeObserver(o) }
-
-            AudioFunctions.activateAudioSession()
-            AudioFunctions.setupRemoteCommands()
-            AudioFunctions.setupAudioSessionObservers()
-
-            AudioFunctions.currentURL = urlString
-
-            // Store inline metadata if provided; otherwise preserve metadata from a prior setMetadata call.
-            if title != nil {
-                AudioFunctions.metaTitle         = title
-                AudioFunctions.metaArtist        = artist
-                AudioFunctions.metaAlbum         = album
-                AudioFunctions.metaDuration      = duration
-                AudioFunctions.metaArtworkSource = artwork
-            }
-
-            AudioFunctions.playerItem = AVPlayerItem(url: url)
-            AudioFunctions.player     = AVPlayer(playerItem: AudioFunctions.playerItem)
-
-            // Apply stored metadata to lock screen / Control Center.
-            AudioFunctions.refreshNowPlayingInfo()
-
-            // Completion observer
-            AudioFunctions.completionObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime,
-                object: AudioFunctions.playerItem, queue: .main
-            ) { _ in
-                AudioFunctions.stopProgressTimer()
-                AudioFunctions.sendEvent("PlaybackCompleted", [
-                    "url": urlString, "duration": AudioFunctions.durationSeconds()
-                ])
-            }
-
-            // Failure observer
-            AudioFunctions.failureObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemFailedToPlayToEndTime,
-                object: AudioFunctions.playerItem, queue: .main
-            ) { notification in
-                AudioFunctions.stopProgressTimer()
-                let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
-                    .localizedDescription ?? "Unknown error"
-                AudioFunctions.sendEvent("PlaybackFailed", ["url": urlString, "error": error])
-            }
+            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration)
 
             AudioFunctions.player?.play()
             // Sync rate/elapsed after play() so the lock screen shows the correct state.

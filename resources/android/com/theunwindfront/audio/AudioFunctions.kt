@@ -369,6 +369,92 @@ class AudioFunctions {
     // Bridge Functions
     // ═════════════════════════════════════════════════════════════════════════
 
+    class Load(private val activity: FragmentActivity) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            activityRef = WeakReference(activity)
+
+            val params   = JSONObject(parameters)
+            val url      = params.optString("url")
+            val title    = params.optString("title").takeIf { it.isNotEmpty() }
+            val artist   = params.optString("artist").takeIf { it.isNotEmpty() }
+            val album    = params.optString("album").takeIf { it.isNotEmpty() }
+            val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
+            val duration = if (params.has("duration")) params.optDouble("duration") else null
+
+            return try {
+                mediaPlayer?.stop()
+                mediaPlayer?.release()
+
+                currentUrl = url
+
+                if (title != null) {
+                    metaTitle         = title
+                    metaArtist        = artist
+                    metaAlbum         = album
+                    metaDurationMs    = duration?.let { (it * 1000).toLong() }
+                    metaArtworkSource = artwork
+                }
+
+                Handler(Looper.getMainLooper()).post {
+                    if (metaTitle != null) {
+                        applySessionMetadata(activity)
+                    }
+
+                    try {
+                        mediaPlayer = MediaPlayer().apply {
+                            setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                                    .build()
+                            )
+                            setDataSource(activity, Uri.parse(url))
+
+                            setOnPreparedListener { _ ->
+                                // Do NOT call start() — audio is loaded but paused.
+                                updateSessionState()
+                                val payload = mutableMapOf<String, Any>("url" to url)
+                                title?.let    { payload["title"]    = it }
+                                artist?.let   { payload["artist"]   = it }
+                                album?.let    { payload["album"]    = it }
+                                duration?.let { payload["duration"] = it }
+                                sendEvent("PlaybackLoaded", payload)
+                            }
+
+                            setOnCompletionListener {
+                                stopProgressTimer()
+                                sendEvent("PlaybackCompleted", mapOf(
+                                    "url" to currentUrl, "duration" to durationSeconds()
+                                ))
+                            }
+
+                            setOnErrorListener { _, what, extra ->
+                                stopProgressTimer()
+                                sendEvent("PlaybackFailed", mapOf(
+                                    "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
+                                ))
+                                false
+                            }
+
+                            prepareAsync()
+                        }
+                    } catch (e: Exception) {
+                        sendEvent("PlaybackFailed", mapOf(
+                            "url" to url, "error" to (e.message ?: "Unknown error")
+                        ))
+                    }
+                }
+
+                mapOf("success" to true)
+            } catch (e: Exception) {
+                sendEvent("PlaybackFailed", mapOf(
+                    "url" to url, "error" to (e.message ?: "Unknown error")
+                ))
+                mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            }
+        }
+    }
+
     class Play(private val activity: FragmentActivity) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
