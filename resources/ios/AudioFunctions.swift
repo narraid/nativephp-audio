@@ -25,6 +25,7 @@ enum AudioFunctions {
     private static var interruptionObserver: Any?
     private static var routeChangeObserver: Any?
     private static var progressObserver: Any?
+    private static weak var progressObserverPlayer: AVPlayer?
 
     // MARK: - Flags
 
@@ -180,12 +181,16 @@ enum AudioFunctions {
         progressObserver = p.addPeriodicTimeObserver(forInterval: cmInterval, queue: .main) { _ in
             sendEvent("PlaybackProgressUpdated", statePayload())
         }
+        progressObserverPlayer = p
     }
 
     static func stopProgressTimer() {
         if let observer = progressObserver {
-            player?.removeTimeObserver(observer)
+            // removeTimeObserver must be called on the same AVPlayer that added it —
+            // calling it on a different instance raises NSInvalidArgumentException.
+            progressObserverPlayer?.removeTimeObserver(observer)
             progressObserver = nil
+            progressObserverPlayer = nil
         }
     }
 
@@ -343,6 +348,10 @@ enum AudioFunctions {
      * but does NOT start playback. Used by both Load and Play.
      */
     private static func preparePlayer(urlString: String, url: URL, title: String?, artist: String?, album: String?, artwork: String?, duration: Double?) {
+        // Stop progress timer BEFORE replacing the player — removeTimeObserver must be
+        // called on the same AVPlayer instance that added it, otherwise it crashes.
+        stopProgressTimer()
+
         // Clean up previous observers
         if let o = completionObserver { NotificationCenter.default.removeObserver(o) }
         if let o = failureObserver    { NotificationCenter.default.removeObserver(o) }
