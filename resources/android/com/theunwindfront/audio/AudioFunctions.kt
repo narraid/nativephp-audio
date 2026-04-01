@@ -383,77 +383,74 @@ class AudioFunctions {
             val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
             val duration = if (params.has("duration")) params.optDouble("duration") else null
 
-            return try {
-                mediaPlayer?.stop()
-                mediaPlayer?.release()
+            currentUrl = url
 
-                currentUrl = url
-
-                if (title != null) {
-                    metaTitle         = title
-                    metaArtist        = artist
-                    metaAlbum         = album
-                    metaDurationMs    = duration?.let { (it * 1000).toLong() }
-                    metaArtworkSource = artwork
-                }
-
-                Handler(Looper.getMainLooper()).post {
-                    if (metaTitle != null) {
-                        applySessionMetadata(activity)
-                    }
-
-                    try {
-                        mediaPlayer = MediaPlayer().apply {
-                            setAudioAttributes(
-                                AudioAttributes.Builder()
-                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                                    .build()
-                            )
-                            setDataSource(activity, Uri.parse(url))
-
-                            setOnPreparedListener { _ ->
-                                // Do NOT call start() — audio is loaded but paused.
-                                updateSessionState()
-                                val payload = mutableMapOf<String, Any>("url" to url)
-                                title?.let    { payload["title"]    = it }
-                                artist?.let   { payload["artist"]   = it }
-                                album?.let    { payload["album"]    = it }
-                                duration?.let { payload["duration"] = it }
-                                sendEvent("PlaybackLoaded", payload)
-                            }
-
-                            setOnCompletionListener {
-                                stopProgressTimer()
-                                sendEvent("PlaybackCompleted", mapOf(
-                                    "url" to currentUrl, "duration" to durationSeconds()
-                                ))
-                            }
-
-                            setOnErrorListener { _, what, extra ->
-                                stopProgressTimer()
-                                sendEvent("PlaybackFailed", mapOf(
-                                    "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
-                                ))
-                                false
-                            }
-
-                            prepareAsync()
-                        }
-                    } catch (e: Exception) {
-                        sendEvent("PlaybackFailed", mapOf(
-                            "url" to url, "error" to (e.message ?: "Unknown error")
-                        ))
-                    }
-                }
-
-                mapOf("success" to true)
-            } catch (e: Exception) {
-                sendEvent("PlaybackFailed", mapOf(
-                    "url" to url, "error" to (e.message ?: "Unknown error")
-                ))
-                mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            if (title != null) {
+                metaTitle         = title
+                metaArtist        = artist
+                metaAlbum         = album
+                metaDurationMs    = duration?.let { (it * 1000).toLong() }
+                metaArtworkSource = artwork
             }
+
+            // All MediaPlayer work must happen on the main thread to avoid race conditions
+            // when switching tracks quickly — stop/release/create must be atomic.
+            Handler(Looper.getMainLooper()).post {
+                stopProgressTimer()
+                try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
+                mediaPlayer?.release()
+                mediaPlayer = null
+
+                if (metaTitle != null) {
+                    applySessionMetadata(activity)
+                }
+
+                try {
+                    mediaPlayer = MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .build()
+                        )
+                        setDataSource(activity, Uri.parse(url))
+
+                        setOnPreparedListener { _ ->
+                            // Do NOT call start() — audio is loaded but paused.
+                            updateSessionState()
+                            val payload = mutableMapOf<String, Any>("url" to url)
+                            title?.let    { payload["title"]    = it }
+                            artist?.let   { payload["artist"]   = it }
+                            album?.let    { payload["album"]    = it }
+                            duration?.let { payload["duration"] = it }
+                            sendEvent("PlaybackLoaded", payload)
+                        }
+
+                        setOnCompletionListener {
+                            stopProgressTimer()
+                            sendEvent("PlaybackCompleted", mapOf(
+                                "url" to currentUrl, "duration" to durationSeconds()
+                            ))
+                        }
+
+                        setOnErrorListener { _, what, extra ->
+                            stopProgressTimer()
+                            sendEvent("PlaybackFailed", mapOf(
+                                "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
+                            ))
+                            false
+                        }
+
+                        prepareAsync()
+                    }
+                } catch (e: Exception) {
+                    sendEvent("PlaybackFailed", mapOf(
+                        "url" to url, "error" to (e.message ?: "Unknown error")
+                    ))
+                }
+            }
+
+            return mapOf("success" to true)
         }
     }
 
@@ -469,87 +466,82 @@ class AudioFunctions {
             val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
             val duration = if (params.has("duration")) params.optDouble("duration") else null
 
-            return try {
-                mediaPlayer?.stop()
-                mediaPlayer?.release()
+            currentUrl = url
 
-                currentUrl = url
-
-                // Store inline metadata if provided; otherwise preserve metadata from a prior setMetadata call.
-                if (title != null) {
-                    metaTitle         = title
-                    metaArtist        = artist
-                    metaAlbum         = album
-                    metaDurationMs    = duration?.let { (it * 1000).toLong() }
-                    metaArtworkSource = artwork
-                }
-
-                // MediaPlayer must be created on a thread with a Looper so it can deliver
-                // onPrepared / onCompletion / onError callbacks via its internal Handler.
-                Handler(Looper.getMainLooper()).post {
-                    // Apply stored metadata to MediaSession (covers both inline and prior setMetadata).
-                    if (metaTitle != null) {
-                        applySessionMetadata(activity)
-                    }
-
-                    try {
-                        mediaPlayer = MediaPlayer().apply {
-                            setAudioAttributes(
-                                AudioAttributes.Builder()
-                                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                                    .build()
-                            )
-                            setDataSource(activity, Uri.parse(url))
-
-                            setOnPreparedListener { mp ->
-                                requestAudioFocus(activity)
-                                mp.start()
-                                updateSessionState()
-                                startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
-                                // Use stored metadata for service notification, falling back to defaults.
-                                val serviceTitle  = metaTitle ?: "Now Playing"
-                                val serviceArtist = metaArtist
-                                AudioService.start(activity, serviceTitle, serviceArtist)
-                                val payload = mutableMapOf<String, Any>("url" to url)
-                                title?.let    { payload["title"]    = it }
-                                artist?.let   { payload["artist"]   = it }
-                                album?.let    { payload["album"]    = it }
-                                duration?.let { payload["duration"] = it }
-                                sendEvent("PlaybackStarted", payload)
-                            }
-
-                            setOnCompletionListener {
-                                stopProgressTimer()
-                                sendEvent("PlaybackCompleted", mapOf(
-                                    "url" to currentUrl, "duration" to durationSeconds()
-                                ))
-                            }
-
-                            setOnErrorListener { _, what, extra ->
-                                stopProgressTimer()
-                                sendEvent("PlaybackFailed", mapOf(
-                                    "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
-                                ))
-                                false
-                            }
-
-                            prepareAsync()
-                        }
-                    } catch (e: Exception) {
-                        sendEvent("PlaybackFailed", mapOf(
-                            "url" to url, "error" to (e.message ?: "Unknown error")
-                        ))
-                    }
-                }
-
-                mapOf("success" to true)
-            } catch (e: Exception) {
-                sendEvent("PlaybackFailed", mapOf(
-                    "url" to url, "error" to (e.message ?: "Unknown error")
-                ))
-                mapOf("success" to false, "error" to (e.message ?: "Unknown error"))
+            // Store inline metadata if provided; otherwise preserve metadata from a prior setMetadata call.
+            if (title != null) {
+                metaTitle         = title
+                metaArtist        = artist
+                metaAlbum         = album
+                metaDurationMs    = duration?.let { (it * 1000).toLong() }
+                metaArtworkSource = artwork
             }
+
+            // All MediaPlayer work must happen on the main thread to avoid race conditions
+            // when switching tracks quickly — stop/release/create must be atomic.
+            Handler(Looper.getMainLooper()).post {
+                stopProgressTimer()
+                try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
+                mediaPlayer?.release()
+                mediaPlayer = null
+
+                // Apply stored metadata to MediaSession (covers both inline and prior setMetadata).
+                if (metaTitle != null) {
+                    applySessionMetadata(activity)
+                }
+
+                try {
+                    mediaPlayer = MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .build()
+                        )
+                        setDataSource(activity, Uri.parse(url))
+
+                        setOnPreparedListener { mp ->
+                            requestAudioFocus(activity)
+                            mp.start()
+                            updateSessionState()
+                            startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
+                            // Use stored metadata for service notification, falling back to defaults.
+                            val serviceTitle  = metaTitle ?: "Now Playing"
+                            val serviceArtist = metaArtist
+                            AudioService.start(activity, serviceTitle, serviceArtist)
+                            val payload = mutableMapOf<String, Any>("url" to url)
+                            title?.let    { payload["title"]    = it }
+                            artist?.let   { payload["artist"]   = it }
+                            album?.let    { payload["album"]    = it }
+                            duration?.let { payload["duration"] = it }
+                            sendEvent("PlaybackStarted", payload)
+                        }
+
+                        setOnCompletionListener {
+                            stopProgressTimer()
+                            sendEvent("PlaybackCompleted", mapOf(
+                                "url" to currentUrl, "duration" to durationSeconds()
+                            ))
+                        }
+
+                        setOnErrorListener { _, what, extra ->
+                            stopProgressTimer()
+                            sendEvent("PlaybackFailed", mapOf(
+                                "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
+                            ))
+                            false
+                        }
+
+                        prepareAsync()
+                    }
+                } catch (e: Exception) {
+                    sendEvent("PlaybackFailed", mapOf(
+                        "url" to url, "error" to (e.message ?: "Unknown error")
+                    ))
+                }
+            }
+
+            return mapOf("success" to true)
         }
     }
 
