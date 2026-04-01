@@ -90,12 +90,14 @@ class AudioFunctions {
 
         // ── Position / Duration ───────────────────────────────────────────────
 
-        private fun positionSeconds(): Double = (mediaPlayer?.currentPosition ?: 0) / 1000.0
+        private fun positionSeconds(): Double = try {
+            (mediaPlayer?.currentPosition ?: 0) / 1000.0
+        } catch (_: IllegalStateException) { 0.0 }
 
-        private fun durationSeconds(): Double {
+        private fun durationSeconds(): Double = try {
             val ms = mediaPlayer?.duration ?: 0
-            return if (ms < 0) 0.0 else ms / 1000.0
-        }
+            if (ms < 0) 0.0 else ms / 1000.0
+        } catch (_: IllegalStateException) { 0.0 }
 
         // ── Session Metadata ──────────────────────────────────────────────────
 
@@ -357,7 +359,7 @@ class AudioFunctions {
          */
         private fun releasePlayer() {
             stopProgressTimer()
-            mediaPlayer?.stop()
+            try { mediaPlayer?.stop() } catch (_: IllegalStateException) { /* already stopped or in error state */ }
             mediaPlayer?.release()
             mediaPlayer = null
             abandonAudioFocus()

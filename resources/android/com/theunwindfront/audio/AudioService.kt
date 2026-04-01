@@ -7,9 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 
 /**
@@ -57,13 +59,25 @@ class AudioService : Service() {
                 // New play or metadata update — update stored title/artist and (re)start foreground
                 intent?.getStringExtra(EXTRA_TITLE)?.let { currentTitle = it }
                 intent?.getStringExtra(EXTRA_ARTIST).let { currentArtist = it }
-                startForeground(NOTIFICATION_ID, buildNotification())
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    buildNotification(),
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    else 0
+                )
             }
         }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        super.onDestroy()
+    }
 
     // -------------------------------------------------------------------------
 
@@ -179,10 +193,14 @@ class AudioService : Service() {
                 putExtra(EXTRA_TITLE, title)
                 artist?.let { putExtra(EXTRA_ARTIST, it) }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Exception) {
+                // ForegroundServiceStartNotAllowedException on Android 12+ when app is in background
             }
         }
 
