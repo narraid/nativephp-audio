@@ -83,7 +83,7 @@
         "services": [
             {
                 "name": "com.theunwindfront.audio.AudioService",
-                "foreground_service_type": "mediaPlayback",
+                "foregroundServiceType": "mediaPlayback",
                 "exported": false
             }
         ],
