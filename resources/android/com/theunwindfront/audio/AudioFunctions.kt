@@ -558,6 +558,7 @@ class AudioFunctions {
 
     class Resume(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            requestAudioFocus(context)
             mediaPlayer?.start()
             updateSessionState()
             startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)

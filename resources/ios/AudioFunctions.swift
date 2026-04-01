@@ -472,6 +472,7 @@ enum AudioFunctions {
 
     class Resume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            AudioFunctions.activateAudioSession()
             AudioFunctions.player?.play()
             AudioFunctions.syncNowPlayingState()
             AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
