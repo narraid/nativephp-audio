@@ -614,6 +614,28 @@ class AudioFunctions {
     }
 
     /**
+     * Returns the full current playback state from the native layer.
+     * Used by PHP to reconcile state after a runtime restart (e.g. OS killed PHP in background).
+     */
+    class GetState(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val state = mutableMapOf<String, Any>(
+                "url"        to currentUrl,
+                "position"   to positionSeconds(),
+                "duration"   to durationSeconds(),
+                "isPlaying"  to (mediaPlayer?.isPlaying == true),
+                "hasPlayer"  to (mediaPlayer != null),
+            )
+            metaTitle?.let         { state["title"]    = it }
+            metaArtist?.let        { state["artist"]   = it }
+            metaAlbum?.let         { state["album"]    = it }
+            metaDurationMs?.let    { state["duration"] = it / 1000.0 }
+            metaArtworkSource?.let { state["artwork"]  = it }
+            return state
+        }
+    }
+
+    /**
      * Sets track metadata on the MediaSession for lock screens, Bluetooth, Android Auto,
      * and notification controls.
      *

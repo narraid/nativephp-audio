@@ -525,6 +525,30 @@ enum AudioFunctions {
     }
 
     /**
+     * Returns the full current playback state from the native layer.
+     * Used by PHP to reconcile state after a runtime restart (e.g. OS killed PHP in background).
+     *
+     * Returns: url, position, duration, isPlaying, title, artist, album, artwork, hasPlayer
+     */
+    class GetState: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            var state: [String: Any] = [
+                "url":        AudioFunctions.currentURL,
+                "position":   AudioFunctions.positionSeconds(),
+                "duration":   AudioFunctions.durationSeconds(),
+                "isPlaying":  AudioFunctions.player?.rate ?? 0 > 0,
+                "hasPlayer":  AudioFunctions.player != nil,
+            ]
+            if let t = AudioFunctions.metaTitle         { state["title"]    = t }
+            if let a = AudioFunctions.metaArtist         { state["artist"]   = a }
+            if let a = AudioFunctions.metaAlbum          { state["album"]    = a }
+            if let d = AudioFunctions.metaDuration       { state["duration"] = d }
+            if let w = AudioFunctions.metaArtworkSource  { state["artwork"]  = w }
+            return BridgeResponse.success(data: state)
+        }
+    }
+
+    /**
      * Sets track metadata on MPNowPlayingInfoCenter for display on lock screens,
      * Control Center, Bluetooth devices, and CarPlay.
      *

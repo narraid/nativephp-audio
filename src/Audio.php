@@ -219,6 +219,29 @@ class Audio
     }
 
     /**
+     * Get the full current playback state from the native audio layer.
+     *
+     * Returns an associative array with keys:
+     *   url, position, duration, isPlaying, hasPlayer, title, artist, album, artwork
+     *
+     * Returns null when not running inside a NativePHP app or the call fails.
+     */
+    public function getState(): ?array
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.getState', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return is_array($decoded) ? $decoded : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
      *
      * @param  string       $title    Track title
