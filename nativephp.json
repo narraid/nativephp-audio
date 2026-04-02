@@ -57,6 +57,12 @@
             "description": "Get the current playback position in seconds"
         },
         {
+            "name": "Audio.getState",
+            "android": "com.theunwindfront.audio.AudioFunctions.GetState",
+            "ios": "AudioFunctions.GetState",
+            "description": "Get the full current playback state (url, position, duration, isPlaying, metadata) from the native audio layer"
+        },
+        {
             "name": "Audio.setMetadata",
             "android": "com.narraid.audio.AudioFunctions.SetMetadata",
             "ios": "AudioFunctions.SetMetadata",
