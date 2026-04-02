@@ -24,13 +24,13 @@ I'm actively working on the following features and will update the package soon:
 
 ```bash
 # Install the package
-composer require theunwindfront/nativephp-audio
+composer require narraid/nativephp-audio
 
 # Publish the plugins provider (first time only)
 php artisan vendor:publish --tag=nativephp-plugins-provider
 
 # Register the plugin
-php artisan native:plugin:register theunwindfront/nativephp-audio
+php artisan native:plugin:register narraid/nativephp-audio
 
 # Verify registration
 php artisan native:plugin:list
@@ -41,7 +41,7 @@ php artisan native:plugin:list
 ### PHP (Livewire/Blade)
 
 ```php
-use Theunwindfront\Audio\Facades\Audio;
+use Narraid\Audio\Facades\Audio;
 
 // Play an audio file (using a sample open-source link for testing)
 Audio::play('https://www.w3schools.com/html/horse.mp3');
@@ -66,7 +66,7 @@ $position = Audio::getCurrentPosition();
 ### JavaScript (Vue/React/Inertia)
 
 ```javascript
-import { audioPlayer } from '@theunwindfront/nativephp-audio';
+import { audioPlayer } from '@narraid/nativephp-audio';
 
 // Play an audio file
 await audioPlayer.play('https://www.w3schools.com/html/horse.mp3');
@@ -194,7 +194,7 @@ nativephp.json (Android)
     - Dispatched via POST /_native/api/events just like the other events
 
   How the events flow:
-    1. Native layer (Swift/Kotlin) calls POST /_native/api/events with event=Theunwindfront\Audio\Events\PlaybackStarted&payload[]=<url>
+    1. Native layer (Swift/Kotlin) calls POST /_native/api/events with event=Narraid\Audio\Events\PlaybackStarted&payload[]=<url>
     2. NativePHP's DispatchEventFromAppController instantiates and dispatches the Laravel event
     3. Your app listens with standard Laravel event listeners or Livewire #[On('native:...')] attributes
 
@@ -346,7 +346,7 @@ Maps the PHP event to the JS custom event audio-remote-seek.
 resources/ios/AudioFunctions.swift                                                                                                                                                                                      
 Registered changePlaybackPositionCommand handler — seeks the player then dispatches RemoteSeekReceived.
 
-resources/android/com/theunwindfront/audio/AudioFunctions.kt                                                                                                                                                          
+resources/android/com/narraid/audio/AudioFunctions.kt                                                                                                                                                          
 Added onSeekTo() override in the MediaSessionCompat.Callback — seeks the player and dispatches RemoteSeekReceived.
                                                                                                                                                                                                                           
 ---
@@ -360,7 +360,7 @@ window.addEventListener('audio-remote-seek', (e) => {
 });
 
 Livewire:                                                                                                                                                                                                               
-#[On('native:Theunwindfront\\Audio\\Events\\RemoteSeekReceived')]                                                                                                                                                     
+#[On('native:Narraid\\Audio\\Events\\RemoteSeekReceived')]                                                                                                                                                     
 public function handleRemoteSeek($url, $position, $duration, $seekTo) {                                                                                                                                                 
 // update your UI position state                                   
 }                                      
@@ -402,7 +402,7 @@ Refactoring Summary
 
 Extracted Helpers (both platforms)
 
-- sendEvent(name, payload) - auto-prefixes event names, eliminating "Theunwindfront\\Audio\\Events\\" repeated ~15 times
+- sendEvent(name, payload) - auto-prefixes event names, eliminating "Narraid\\Audio\\Events\\" repeated ~15 times
 - statePayload() - builds the common position/duration/url dictionary, was copy-pasted ~15 times
 - loadArtworkAsync() - shared artwork loading logic, was duplicated between Play and SetMetadata
 
@@ -444,7 +444,7 @@ Changes made:
    - Resets timer on Pause, Resume, and Seek                                                                                                                                                                                                                             
    - Stops timer on PlaybackCompleted and PlaybackFailed                                                                                                                                                                                                                 
    - Stop on Stop was already handled via resetPlayer()
-4. resources/android/com/theunwindfront/audio/AudioFunctions.kt:                                                                                                                                                                                                        
+4. resources/android/com/narraid/audio/AudioFunctions.kt:                                                                                                                                                                                                        
    - Removed SetProgressInterval bridge class                                                                                                                                                                                                                            
    - Added DEFAULT_PROGRESS_INTERVAL_MS = 10_000 constant                                                                                                                                                                                                                
    - Auto-starts progress timer on Play (after mp.start())                                                                                                                                                                                                               

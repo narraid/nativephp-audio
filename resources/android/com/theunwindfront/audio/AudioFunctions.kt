@@ -1,4 +1,4 @@
-package com.theunwindfront.audio
+package com.narraid.audio
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -75,7 +75,7 @@ class AudioFunctions {
 
         // ── Event Helpers ─────────────────────────────────────────────────────
 
-        private const val EVENT_PREFIX = "Theunwindfront\\Audio\\Events\\"
+        private const val EVENT_PREFIX = "Narraid\\Audio\\Events\\"
 
         internal fun sendEvent(name: String, payload: Map<String, Any>) {
             val activity = activityRef?.get() ?: return

@@ -4,61 +4,61 @@
     "bridge_functions": [
         {
             "name": "Audio.load",
-            "android": "com.theunwindfront.audio.AudioFunctions.Load",
+            "android": "com.narraid.audio.AudioFunctions.Load",
             "ios": "AudioFunctions.Load",
             "description": "Load an audio file without starting playback. Use resume() to start playing."
         },
         {
             "name": "Audio.play",
-            "android": "com.theunwindfront.audio.AudioFunctions.Play",
+            "android": "com.narraid.audio.AudioFunctions.Play",
             "ios": "AudioFunctions.Play",
             "description": "Play an audio file from a URL or local path"
         },
         {
             "name": "Audio.pause",
-            "android": "com.theunwindfront.audio.AudioFunctions.Pause",
+            "android": "com.narraid.audio.AudioFunctions.Pause",
             "ios": "AudioFunctions.Pause",
             "description": "Pause the current audio playback"
         },
         {
             "name": "Audio.resume",
-            "android": "com.theunwindfront.audio.AudioFunctions.Resume",
+            "android": "com.narraid.audio.AudioFunctions.Resume",
             "ios": "AudioFunctions.Resume",
             "description": "Resume the paused audio playback"
         },
         {
             "name": "Audio.stop",
-            "android": "com.theunwindfront.audio.AudioFunctions.Stop",
+            "android": "com.narraid.audio.AudioFunctions.Stop",
             "ios": "AudioFunctions.Stop",
             "description": "Stop the audio playback and reset the position"
         },
         {
             "name": "Audio.seek",
-            "android": "com.theunwindfront.audio.AudioFunctions.Seek",
+            "android": "com.narraid.audio.AudioFunctions.Seek",
             "ios": "AudioFunctions.Seek",
             "description": "Seek to a specific position in the audio (in seconds)"
         },
         {
             "name": "Audio.setVolume",
-            "android": "com.theunwindfront.audio.AudioFunctions.SetVolume",
+            "android": "com.narraid.audio.AudioFunctions.SetVolume",
             "ios": "AudioFunctions.SetVolume",
             "description": "Set the audio volume (0.0 to 1.0)"
         },
         {
             "name": "Audio.getDuration",
-            "android": "com.theunwindfront.audio.AudioFunctions.GetDuration",
+            "android": "com.narraid.audio.AudioFunctions.GetDuration",
             "ios": "AudioFunctions.GetDuration",
             "description": "Get the duration of the current audio in seconds"
         },
         {
             "name": "Audio.getCurrentPosition",
-            "android": "com.theunwindfront.audio.AudioFunctions.GetCurrentPosition",
+            "android": "com.narraid.audio.AudioFunctions.GetCurrentPosition",
             "ios": "AudioFunctions.GetCurrentPosition",
             "description": "Get the current playback position in seconds"
         },
         {
             "name": "Audio.setMetadata",
-            "android": "com.theunwindfront.audio.AudioFunctions.SetMetadata",
+            "android": "com.narraid.audio.AudioFunctions.SetMetadata",
             "ios": "AudioFunctions.SetMetadata",
             "description": "Set track metadata (title, artist, album, artwork, duration) for lock screens, Bluetooth devices, and OS media centers"
         }
@@ -82,7 +82,7 @@
         "activities": [],
         "services": [
             {
-                "name": "com.theunwindfront.audio.AudioService",
+                "name": "com.narraid.audio.AudioService",
                 "foregroundServiceType": "mediaPlayback",
                 "exported": false
             }
@@ -105,25 +105,25 @@
     },
 
     "events": [
-        "Theunwindfront\\Audio\\Events\\PlaybackLoaded",
-        "Theunwindfront\\Audio\\Events\\PlaybackStarted",
-        "Theunwindfront\\Audio\\Events\\PlaybackPaused",
-        "Theunwindfront\\Audio\\Events\\PlaybackResumed",
-        "Theunwindfront\\Audio\\Events\\PlaybackStopped",
-        "Theunwindfront\\Audio\\Events\\PlaybackCompleted",
-        "Theunwindfront\\Audio\\Events\\PlaybackSeeked",
-        "Theunwindfront\\Audio\\Events\\PlaybackFailed",
-        "Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated",
-        "Theunwindfront\\Audio\\Events\\RemotePlayReceived",
-        "Theunwindfront\\Audio\\Events\\RemotePauseReceived",
-        "Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived",
-        "Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived",
-        "Theunwindfront\\Audio\\Events\\RemoteSeekReceived",
-        "Theunwindfront\\Audio\\Events\\RemoteStopReceived",
-        "Theunwindfront\\Audio\\Events\\AudioFocusLost",
-        "Theunwindfront\\Audio\\Events\\AudioFocusLostTransient",
-        "Theunwindfront\\Audio\\Events\\AudioFocusDucked",
-        "Theunwindfront\\Audio\\Events\\AudioFocusGained"
+        "Narraid\\Audio\\Events\\PlaybackLoaded",
+        "Narraid\\Audio\\Events\\PlaybackStarted",
+        "Narraid\\Audio\\Events\\PlaybackPaused",
+        "Narraid\\Audio\\Events\\PlaybackResumed",
+        "Narraid\\Audio\\Events\\PlaybackStopped",
+        "Narraid\\Audio\\Events\\PlaybackCompleted",
+        "Narraid\\Audio\\Events\\PlaybackSeeked",
+        "Narraid\\Audio\\Events\\PlaybackFailed",
+        "Narraid\\Audio\\Events\\PlaybackProgressUpdated",
+        "Narraid\\Audio\\Events\\RemotePlayReceived",
+        "Narraid\\Audio\\Events\\RemotePauseReceived",
+        "Narraid\\Audio\\Events\\RemoteNextTrackReceived",
+        "Narraid\\Audio\\Events\\RemotePreviousTrackReceived",
+        "Narraid\\Audio\\Events\\RemoteSeekReceived",
+        "Narraid\\Audio\\Events\\RemoteStopReceived",
+        "Narraid\\Audio\\Events\\AudioFocusLost",
+        "Narraid\\Audio\\Events\\AudioFocusLostTransient",
+        "Narraid\\Audio\\Events\\AudioFocusDucked",
+        "Narraid\\Audio\\Events\\AudioFocusGained"
     ],
 
     "hooks": {}

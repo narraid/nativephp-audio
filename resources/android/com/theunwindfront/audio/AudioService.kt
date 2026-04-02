@@ -1,4 +1,4 @@
-package com.theunwindfront.audio
+package com.narraid.audio
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -176,10 +176,10 @@ class AudioService : Service() {
         const val CHANNEL_ID = "nativephp_audio_playback"
         const val EXTRA_TITLE  = "title"
         const val EXTRA_ARTIST = "artist"
-        const val ACTION_TOGGLE_PLAY_PAUSE = "com.theunwindfront.audio.ACTION_TOGGLE_PLAY_PAUSE"
-        const val ACTION_NEXT              = "com.theunwindfront.audio.ACTION_NEXT"
-        const val ACTION_PREVIOUS          = "com.theunwindfront.audio.ACTION_PREVIOUS"
-        const val ACTION_REFRESH_STATE     = "com.theunwindfront.audio.ACTION_REFRESH_STATE"
+        const val ACTION_TOGGLE_PLAY_PAUSE = "com.narraid.audio.ACTION_TOGGLE_PLAY_PAUSE"
+        const val ACTION_NEXT              = "com.narraid.audio.ACTION_NEXT"
+        const val ACTION_PREVIOUS          = "com.narraid.audio.ACTION_PREVIOUS"
+        const val ACTION_REFRESH_STATE     = "com.narraid.audio.ACTION_REFRESH_STATE"
 
         /** Last-known track title for notification rebuilds triggered by the toggle button. */
         var currentTitle: String  = "Now Playing"

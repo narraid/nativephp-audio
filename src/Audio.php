@@ -1,6 +1,6 @@
 <?php
 
-namespace Theunwindfront\Audio;
+namespace Narraid\Audio;
 
 class Audio
 {

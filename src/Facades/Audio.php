@@ -1,6 +1,6 @@
 <?php
 
-namespace Theunwindfront\Audio\Facades;
+namespace Narraid\Audio\Facades;
 
 use Illuminate\Support\Facades\Facade;
 
@@ -15,12 +15,12 @@ use Illuminate\Support\Facades\Facade;
  * @method static float|null getCurrentPosition()
  * @method static bool setMetadata(string $title, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null)
  *
- * @see \Theunwindfront\Audio\Audio
+ * @see \Narraid\Audio\Audio
  */
 class Audio extends Facade
 {
     protected static function getFacadeAccessor(): string
     {
-        return \Theunwindfront\Audio\Audio::class;
+        return \Narraid\Audio\Audio::class;
     }
 }

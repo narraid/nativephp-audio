@@ -13,7 +13,7 @@
 ## 🎵 NativePHP Audio Player v1.0.1
 
 ### Fixes
-- **Package Naming**: Corrected package name to `theunwindfront/nativephp-audio` for better composer integration.
+- **Package Naming**: Corrected package name to `narraid/nativephp-audio` for better composer integration.
 
 ## 🎵 NativePHP Audio Player v1.0.0
 

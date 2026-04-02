@@ -1,26 +1,26 @@
 {
-    "name": "theunwindfront/nativephp-audio",
-    "description": "Audio player plugin for NativePHP Mobile apps",
+    "name": "narraid/nativephp-audio",
+    "description": "Audio player plugin for NativePHP",
     "version": "2.2.0",
     "type": "nativephp-plugin",
     "license": "MIT",
     "require": {
-        "php": "^8.2",
+        "php": "^8.5",
         "nativephp/mobile": "^3.0",
         "illuminate/support": "^11.0|^12.0"
     },
     "autoload": {
         "psr-4": {
-            "Theunwindfront\\Audio\\": "src/"
+            "Narraid\\Audio\\": "src/"
         }
     },
     "extra": {
         "laravel": {
             "providers": [
-                "Theunwindfront\\Audio\\AudioServiceProvider"
+                "Narraid\\Audio\\AudioServiceProvider"
             ],
             "aliases": {
-                "Audio": "Theunwindfront\\Audio\\Facades\\Audio"
+                "Audio": "Narraid\\Audio\\Facades\\Audio"
             }
         },
         "nativephp": {

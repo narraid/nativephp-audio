@@ -39,7 +39,7 @@ enum AudioFunctions {
 
     // MARK: - Event Helpers
 
-    private static let eventPrefix = "Theunwindfront\\Audio\\Events\\"
+    private static let eventPrefix = "Narraid\\Audio\\Events\\"
 
     private static func sendEvent(_ name: String, _ payload: [String: Any]) {
         LaravelBridge.shared.send?(eventPrefix + name, payload)

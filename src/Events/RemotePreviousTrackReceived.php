@@ -1,6 +1,6 @@
 <?php
 
-namespace Theunwindfront\Audio\Events;
+namespace Narraid\Audio\Events;
 
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
