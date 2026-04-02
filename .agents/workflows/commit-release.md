@@ -15,7 +15,7 @@ This workflow automates the process of resetting the repository history (if requ
    ```bash
    rm -rf .git
    git init
-   git remote add origin git@github.com:theunwindfront/nativephp-audio.git
+   git remote add origin git@github.com:narraid/nativephp-audio.git
    git checkout -b main
    ```
 

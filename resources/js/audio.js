@@ -1,20 +1,22 @@
 const audioPlayer = {
-    load: async (url, { title = null, artist = null, album = null, artwork = null, duration = null } = {}) => {
+    load: async (url, { title = null, artist = null, album = null, artwork = null, duration = null, metadata = null } = {}) => {
         const params = { url };
         if (title !== null) params.title = title;
         if (artist !== null) params.artist = artist;
         if (album !== null) params.album = album;
         if (artwork !== null) params.artwork = artwork;
         if (duration !== null) params.duration = duration;
+        if (metadata !== null) params.metadata = metadata;
         return await window.nativephp.call('Audio.load', params);
     },
-    play: async (url, { title = null, artist = null, album = null, artwork = null, duration = null } = {}) => {
+    play: async (url, { title = null, artist = null, album = null, artwork = null, duration = null, metadata = null } = {}) => {
         const params = { url };
         if (title !== null) params.title = title;
         if (artist !== null) params.artist = artist;
         if (album !== null) params.album = album;
         if (artwork !== null) params.artwork = artwork;
         if (duration !== null) params.duration = duration;
+        if (metadata !== null) params.metadata = metadata;
         return await window.nativephp.call('Audio.play', params);
     },
     pause: async () => {

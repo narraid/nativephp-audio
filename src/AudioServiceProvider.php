@@ -1,7 +1,8 @@
 <?php
 
-namespace Theunwindfront\Audio;
+namespace Narraid\Audio;
 
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\ServiceProvider;
 
 class AudioServiceProvider extends ServiceProvider
@@ -19,7 +20,7 @@ class AudioServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'native-audio');
 
-        \Illuminate\Support\Facades\Blade::directive('nativeAudioBridge', function () {
+        Blade::directive('nativeAudioBridge', function () {
             return "<?php echo view('native-audio::bridge'); ?>";
         });
     }
