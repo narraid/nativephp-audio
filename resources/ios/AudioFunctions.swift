@@ -31,7 +31,13 @@ enum AudioFunctions {
     // MARK: - Flags
 
     private static var remoteCommandsRegistered = false
+    private static var backgroundObserversRegistered = false
     private static var pausedByFocusLoss = false
+
+    // MARK: - Background Event Queue
+
+    private static var isInBackground = false
+    private static var pendingEvents: [[String: Any]] = []
 
     // MARK: - Progress Defaults
 
@@ -42,6 +48,10 @@ enum AudioFunctions {
     private static let eventPrefix = "Narraid\\Audio\\Events\\"
 
     private static func sendEvent(_ name: String, _ payload: [String: Any]) {
+        guard !isInBackground else {
+            pendingEvents.append(["event": name, "payload": payload])
+            return
+        }
         LaravelBridge.shared.send?(eventPrefix + name, payload)
     }
 
@@ -73,6 +83,26 @@ enum AudioFunctions {
         NativePHPPluginRegistry.shared.registerOnAppLaunch("Audio") {
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
             try? AVAudioSession.sharedInstance().setActive(true)
+            AudioFunctions.setupBackgroundObservers()
+        }
+    }
+
+    private static func setupBackgroundObservers() {
+        guard !backgroundObserversRegistered else { return }
+        backgroundObserversRegistered = true
+
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil, queue: .main
+        ) { _ in
+            isInBackground = true
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil, queue: .main
+        ) { _ in
+            isInBackground = false
         }
     }
 
@@ -553,6 +583,22 @@ enum AudioFunctions {
             if let m = AudioFunctions.metaMetadata  { state["metadata"]  = m }
 
             return BridgeResponse.success(data: state)
+        }
+    }
+
+    /**
+     * Returns all events that were queued while the app was in the background,
+     * then clears the queue. Call this when the app returns to the foreground
+     * to replay missed events through Livewire.
+     *
+     * Each entry in the returned array has the shape:
+     *   { "event": "EventName", "payload": { ... } }
+     */
+    class DrainEvents: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let events = AudioFunctions.pendingEvents
+            AudioFunctions.pendingEvents = []
+            return BridgeResponse.success(data: ["events": events])
         }
     }
 

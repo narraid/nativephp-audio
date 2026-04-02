@@ -67,6 +67,12 @@
             "android": "com.narraid.audio.AudioFunctions.SetMetadata",
             "ios": "AudioFunctions.SetMetadata",
             "description": "Set track metadata (title, artist, album, artwork, duration) for lock screens, Bluetooth devices, and OS media centers"
+        },
+        {
+            "name": "Audio.drainEvents",
+            "android": "com.narraid.audio.AudioFunctions.DrainEvents",
+            "ios": "AudioFunctions.DrainEvents",
+            "description": "Return and clear all events queued while the app was in the background"
         }
     ],
 

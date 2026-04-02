@@ -41,6 +41,10 @@ class AudioFunctions {
         internal var currentArtwork: Bitmap? = null
         private var metaMetadata: Map<String, Any>? = null
 
+        // ── Background Event Queue ────────────────────────────────────────────
+        private var isInBackground = false
+        private val pendingEvents: MutableList<Map<String, Any>> = mutableListOf()
+
         // ── Audio Focus ───────────────────────────────────────────────────────
         private const val DUCK_FACTOR = 0.2f
         private var audioManager: AudioManager? = null
@@ -57,18 +61,21 @@ class AudioFunctions {
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
         init {
-            // When the app returns to foreground: refresh the activity reference so events
-            // can be dispatched safely, and restart the progress timer if audio is playing.
+            // When the app returns to foreground: clear the background flag so events are
+            // dispatched again, refresh the activity reference, and restart the progress timer.
             NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_RESUME) { _ ->
+                isInBackground = false
                 MainActivity.instance?.let { activityRef = WeakReference(it) }
                 if (mediaPlayer?.isPlaying == true) {
                     startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
                 }
             }
-            // When the app backgrounds: stop the progress timer. NativeActionCoordinator
-            // calls commitNow() on the fragment manager which throws IllegalStateException
-            // after onSaveInstanceState — dispatching events while paused is unsafe.
+            // When the app backgrounds: set the background flag and stop the progress timer.
+            // NativeActionCoordinator calls commitNow() on the fragment manager which throws
+            // IllegalStateException after onSaveInstanceState — dispatching events while
+            // paused is unsafe, so events are queued instead.
             NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_PAUSE) { _ ->
+                isInBackground = true
                 stopProgressTimer()
             }
         }
@@ -78,6 +85,10 @@ class AudioFunctions {
         private const val EVENT_PREFIX = "Narraid\\Audio\\Events\\"
 
         internal fun sendEvent(name: String, payload: Map<String, Any>) {
+            if (isInBackground) {
+                pendingEvents.add(mapOf("event" to name, "payload" to payload))
+                return
+            }
             val activity = activityRef?.get() ?: return
             if (activity.isDestroyed || activity.isFinishing) return
             val json = JSONObject(payload).toString()
@@ -641,6 +652,22 @@ class AudioFunctions {
             metaMetadata?.let { state["metadata"]  = it }
 
             return state
+        }
+    }
+
+    /**
+     * Returns all events that were queued while the app was in the background,
+     * then clears the queue. Call this when the app returns to the foreground
+     * to replay missed events through Livewire.
+     *
+     * Each entry in the returned list has the shape:
+     *   { "event": "EventName", "payload": { ... } }
+     */
+    class DrainEvents(private val activity: FragmentActivity) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val events = pendingEvents.toList()
+            pendingEvents.clear()
+            return mapOf("success" to true, "events" to events)
         }
     }
 

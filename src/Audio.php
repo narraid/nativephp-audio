@@ -248,6 +248,33 @@ class Audio
     }
 
     /**
+     * Drain all events that were queued while the app was in the background.
+     *
+     * Events are stored natively when PHP cannot safely receive them (background mode).
+     * Call this when the app returns to the foreground — typically in a Livewire component's
+     * mount() or a dedicated resume hook — to replay everything that was missed.
+     *
+     * Each item in the returned array has the shape:
+     *   ['event' => 'EventName', 'payload' => [...]]
+     *
+     * @return array[]
+     */
+    public function drainEvents(): array
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.drainEvents', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return $decoded['events'] ?? [];
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
      *
      * @param  string       $title    Track title

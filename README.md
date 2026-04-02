@@ -465,4 +465,36 @@ iOS (AudioFunctions.swift)
 - Added metaMetadata: [String: Any]? to stored metadata fields
 - Added metadata: [String: Any]? parameter to preparePlayer and stores it in metaMetadata when title != nil
 - In both Load and Play: parse metadata = parameters["metadata"] as? [String: Any]
-- Pass it through to preparePlayer and append if let m = metadata { payload["metadata"] = m } to both PlaybackLoaded and PlaybackStarted event payloads        
+- Pass it through to preparePlayer and append if let m = metadata { payload["metadata"] = m } to both PlaybackLoaded and PlaybackStarted event payloads
+
+All changes are done. Here's a summary of what was implemented:
+
+  ---
+Background Event Queue
+
+How it works
+
+When the app goes to background:
+- iOS: UIApplication.willResignActiveNotification sets isInBackground = true
+- Android: NativePHPLifecycle.ON_PAUSE sets isInBackground = true (alongside stopping the progress timer)
+
+While in background — every sendEvent() call on both platforms checks the flag. If true, the event is appended to pendingEvents as {event: "EventName", payload: {...}} instead of being dispatched to PHP. PHP never sees them, so a killed
+PHP process loses nothing.
+
+When the app returns to foreground:
+- iOS: UIApplication.willEnterForegroundNotification sets isInBackground = false
+- Android: NativePHPLifecycle.ON_RESUME sets isInBackground = false
+
+PHP drains the queue:
+$events = Audio::drainEvents();
+// [['event' => 'PlaybackProgressUpdated', 'payload' => [...]], ...]
+
+foreach ($events as $queued) {
+match ($queued['event']) {
+'PlaybackProgressUpdated' => $this->handleProgress($queued['payload']),
+'PlaybackCompleted'       => $this->handleCompleted($queued['payload']),
+// ...
+};
+}
+
+Call Audio::drainEvents() in your Livewire component's mount() or wherever you handle app resume — all missed events will be returned and the queue cleared.
