@@ -3,6 +3,12 @@
 
     "bridge_functions": [
         {
+            "name": "Audio.load",
+            "android": "com.theunwindfront.audio.AudioFunctions.Load",
+            "ios": "AudioFunctions.Load",
+            "description": "Load an audio file without starting playback. Use resume() to start playing."
+        },
+        {
             "name": "Audio.play",
             "android": "com.theunwindfront.audio.AudioFunctions.Play",
             "ios": "AudioFunctions.Play",
@@ -49,25 +55,46 @@
             "android": "com.theunwindfront.audio.AudioFunctions.GetCurrentPosition",
             "ios": "AudioFunctions.GetCurrentPosition",
             "description": "Get the current playback position in seconds"
+        },
+        {
+            "name": "Audio.setMetadata",
+            "android": "com.theunwindfront.audio.AudioFunctions.SetMetadata",
+            "ios": "AudioFunctions.SetMetadata",
+            "description": "Set track metadata (title, artist, album, artwork, duration) for lock screens, Bluetooth devices, and OS media centers"
         }
     ],
 
     "android": {
         "min_version": 21,
         "permissions": [
-            "android.permission.INTERNET"
+            "android.permission.INTERNET",
+            "android.permission.MEDIA_CONTENT_CONTROL",
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+            "android.permission.WAKE_LOCK"
         ],
         "dependencies": {
-            "implementation": []
+            "implementation": [
+                "androidx.media:media:1.7.0",
+                "androidx.core:core-ktx:1.13.1"
+            ]
         },
         "activities": [],
-        "services": [],
+        "services": [
+            {
+                "name": "com.theunwindfront.audio.AudioService",
+                "foregroundServiceType": "mediaPlayback",
+                "exported": false
+            }
+        ],
         "receivers": [],
         "providers": []
     },
 
     "ios": {
         "min_version": "13.0",
+        "init_function": "AudioFunctions.setupAudioSession",
+        "background_modes": ["audio"],
         "info_plist": {
             "NSAppleMusicUsageDescription": "We need access to your music library to play audio files."
         },
@@ -78,10 +105,25 @@
     },
 
     "events": [
+        "Theunwindfront\\Audio\\Events\\PlaybackLoaded",
         "Theunwindfront\\Audio\\Events\\PlaybackStarted",
         "Theunwindfront\\Audio\\Events\\PlaybackPaused",
+        "Theunwindfront\\Audio\\Events\\PlaybackResumed",
         "Theunwindfront\\Audio\\Events\\PlaybackStopped",
-        "Theunwindfront\\Audio\\Events\\PlaybackCompleted"
+        "Theunwindfront\\Audio\\Events\\PlaybackCompleted",
+        "Theunwindfront\\Audio\\Events\\PlaybackSeeked",
+        "Theunwindfront\\Audio\\Events\\PlaybackFailed",
+        "Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated",
+        "Theunwindfront\\Audio\\Events\\RemotePlayReceived",
+        "Theunwindfront\\Audio\\Events\\RemotePauseReceived",
+        "Theunwindfront\\Audio\\Events\\RemoteNextTrackReceived",
+        "Theunwindfront\\Audio\\Events\\RemotePreviousTrackReceived",
+        "Theunwindfront\\Audio\\Events\\RemoteSeekReceived",
+        "Theunwindfront\\Audio\\Events\\RemoteStopReceived",
+        "Theunwindfront\\Audio\\Events\\AudioFocusLost",
+        "Theunwindfront\\Audio\\Events\\AudioFocusLostTransient",
+        "Theunwindfront\\Audio\\Events\\AudioFocusDucked",
+        "Theunwindfront\\Audio\\Events\\AudioFocusGained"
     ],
 
     "hooks": {}

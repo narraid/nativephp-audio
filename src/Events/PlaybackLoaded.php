@@ -5,7 +5,7 @@ namespace Theunwindfront\Audio\Events;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class PlaybackStarted
+class PlaybackLoaded
 {
     use Dispatchable, SerializesModels;
 

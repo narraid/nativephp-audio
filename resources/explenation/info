@@ -1,0 +1,577 @@
+Location: nativephp/ios/NativePHP/Bridge/Functions/AudioPlayerFunctions.swift
+
+import Foundation
+import AVFoundation
+import MediaPlayer
+
+// MARK: - Audio Player Manager
+
+class AudioPlayerManager {
+    static let shared = AudioPlayerManager()
+
+    private var player: AVPlayer?
+    private var timeObserver: Any?
+
+    private init() {
+        setupRemoteCommands()
+    }
+
+    func load(url: URL, title: String, artist: String, artwork: String?) {
+        // Remove existing time observer
+        if let observer = timeObserver {
+            player?.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+
+        // Create player
+        let playerItem = AVPlayerItem(url: url)
+        player = AVPlayer(playerItem: playerItem)
+
+        // Setup Now Playing metadata
+        setupNowPlaying(title: title, artist: artist, artwork: artwork, duration: getDuration())
+
+        // Add time observer for progress updates
+        let interval = CMTime(seconds: 1.0, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            guard let self = self else { return }
+            let currentTime = CMTimeGetSeconds(time)
+            let duration = self.getDuration()
+
+            // Send progress update to JavaScript
+            LaravelBridge.shared.send?("Native\\Mobile\\Events\\AudioPlayer\\TimeUpdate", [
+                "currentTime": currentTime,
+                "duration": duration
+            ])
+
+            // Update Now Playing elapsed time
+            self.updateNowPlayingTime(currentTime)
+        }
+
+        // Observe playback end
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateNowPlayingState(isPlaying: false)
+            LaravelBridge.shared.send?("Native\\Mobile\\Events\\AudioPlayer\\Ended", [:])
+        }
+
+        print("📱 Audio loaded: \(url)")
+    }
+
+    func play() {
+        player?.play()
+        updateNowPlayingState(isPlaying: true)
+        print("📱 Audio playing")
+    }
+
+    func pause() {
+        player?.pause()
+        updateNowPlayingState(isPlaying: false)
+        print("📱 Audio paused")
+    }
+
+    func seek(to time: Double) {
+        let cmTime = CMTime(seconds: time, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        player?.seek(to: cmTime)
+        updateNowPlayingTime(time)
+        print("📱 Audio seeked to: \(time)")
+    }
+
+    func getCurrentTime() -> Double {
+        guard let player = player else { return 0 }
+        return CMTimeGetSeconds(player.currentTime())
+    }
+
+    func getDuration() -> Double {
+        guard let player = player,
+              let duration = player.currentItem?.duration else { return 0 }
+        let seconds = CMTimeGetSeconds(duration)
+        return seconds.isNaN ? 0 : seconds
+    }
+
+    func isPlaying() -> Bool {
+        return player?.rate != 0 && player?.error == nil
+    }
+
+    // MARK: - Now Playing Integration
+
+    private func setupNowPlaying(title: String, artist: String, artwork: String?, duration: Double) {
+        var nowPlayingInfo: [String: Any] = [
+            MPMediaItemPropertyTitle: title,
+            MPMediaItemPropertyArtist: artist,
+            MPMediaItemPropertyPlaybackDuration: duration,
+            MPNowPlayingInfoPropertyPlaybackRate: 0.0,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
+        ]
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        print("📱 Now Playing info set: \(title) by \(artist)")
+
+        // Load artwork asynchronously
+        if let artworkString = artwork {
+            loadArtwork(from: artworkString) { artwork in
+                if let artwork = artwork {
+                    var updatedInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? nowPlayingInfo
+                    updatedInfo[MPMediaItemPropertyArtwork] = artwork
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = updatedInfo
+                    print("📱 Artwork loaded and set")
+                }
+            }
+        }
+    }
+
+    private func updateNowPlayingState(isPlaying: Bool) {
+        DispatchQueue.main.async {
+            if var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo {
+                currentInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+                currentInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.getCurrentTime()
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
+            }
+        }
+    }
+
+    private func updateNowPlayingTime(_ time: Double) {
+        DispatchQueue.main.async {
+            if var currentInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo {
+                currentInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = time
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = currentInfo
+            }
+        }
+    }
+
+    private func loadArtwork(from string: String, completion: @escaping (MPMediaItemArtwork?) -> Void) {
+        if let url = URL(string: string), string.hasPrefix("http") {
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let data = try? Data(contentsOf: url),
+                   let image = UIImage(data: data) {
+                    let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    DispatchQueue.main.async {
+                        completion(artwork)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        completion(nil)
+                    }
+                }
+            }
+        } else if let data = Data(base64Encoded: string),
+                  let image = UIImage(data: data) {
+            let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            completion(artwork)
+        } else {
+            completion(nil)
+        }
+    }
+
+    private func setupRemoteCommands() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.playCommand.addTarget { [weak self] _ in
+            self?.play()
+            return .success
+        }
+
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.pauseCommand.addTarget { [weak self] _ in
+            self?.pause()
+            return .success
+        }
+
+        commandCenter.nextTrackCommand.isEnabled = true
+        commandCenter.nextTrackCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            let newTime = min(self.getCurrentTime() + 10, self.getDuration())
+            self.seek(to: newTime)
+            return .success
+        }
+
+        commandCenter.previousTrackCommand.isEnabled = true
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            let newTime = max(self.getCurrentTime() - 10, 0)
+            self.seek(to: newTime)
+            return .success
+        }
+
+        print("📱 Remote commands configured")
+    }
+}
+
+// MARK: - Audio Player Bridge Functions
+
+enum AudioPlayerFunctions {
+
+    /// Load audio with metadata
+    class Load: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let urlString = parameters["url"] as? String,
+                  let url = URL(string: urlString) else {
+                throw BridgeError.invalidParameters("url is required")
+            }
+
+            let title = parameters["title"] as? String ?? "Unknown Track"
+            let artist = parameters["artist"] as? String ?? "Unknown Artist"
+            let artwork = parameters["artwork"] as? String
+
+            AudioPlayerManager.shared.load(url: url, title: title, artist: artist, artwork: artwork)
+
+            return [
+                "success": true,
+                "duration": AudioPlayerManager.shared.getDuration()
+            ]
+        }
+    }
+
+    /// Play audio
+    class Play: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            AudioPlayerManager.shared.play()
+            return ["success": true]
+        }
+    }
+
+    /// Pause audio
+    class Pause: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            AudioPlayerManager.shared.pause()
+            return ["success": true]
+        }
+    }
+
+    /// Seek to time
+    class Seek: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let time = parameters["time"] as? Double else {
+                throw BridgeError.invalidParameters("time is required")
+            }
+            AudioPlayerManager.shared.seek(to: time)
+            return ["success": true]
+        }
+    }
+
+    /// Get player state
+    class GetState: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            return [
+                "success": true,
+                "currentTime": AudioPlayerManager.shared.getCurrentTime(),
+                "duration": AudioPlayerManager.shared.getDuration(),
+                "isPlaying": AudioPlayerManager.shared.isPlaying()
+            ]
+        }
+    }
+}
+
+
+-----------------
+
+
+Register the functions
+
+Location: nativephp/ios/NativePHP/Bridge/BridgeFunctionRegistration.swift
+
+registry.register("AudioPlayer.Load", function: AudioPlayerFunctions.Load())
+registry.register("AudioPlayer.Play", function: AudioPlayerFunctions.Play())
+registry.register("AudioPlayer.Pause", function: AudioPlayerFunctions.Pause())
+registry.register("AudioPlayer.Seek", function: AudioPlayerFunctions.Seek())
+registry.register("AudioPlayer.GetState", function: AudioPlayerFunctions.GetState())
+
+
+--------
+
+Location: nativephp/ios/NativePHP/AppDelegate.swift
+
+// Added to didFinishLaunchingWithOptions method:
+// Configure audio session for media playback
+do {
+    try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+    try AVAudioSession.sharedInstance().setActive(true)
+    print("✅ Audio session configured for playback")
+} catch {
+    print("❌ Failed to configure audio session: \(error)")
+}
+
+import SwiftUI
+import AVFoundation
+import UserNotifications
+import FirebaseMessaging
+
+class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNotificationCenterDelegate {
+    static let shared = AppDelegate()
+
+    // Called when the app is launched
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Configure audio session for media playback
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            try AVAudioSession.sharedInstance().setActive(true)
+            print("✅ Audio session configured for playback")
+        } catch {
+            print("❌ Failed to configure audio session: \(error)")
+        }
+
+        // Set self as the delegate for the Messaging instance
+        if FirebaseManager.shared.isConfigured {
+            Messaging.messaging().delegate = self
+        }
+
+        // Set self as the delegate for notification center to handle foreground notifications
+        UNUserNotificationCenter.current().delegate = self
+
+        // Check if the app was launched from a URL (custom scheme)
+        if let url = launchOptions?[UIApplication.LaunchOptionsKey.url] as? URL {
+            DebugLogger.shared.log("📱 AppDelegate: Cold start with custom scheme URL: \(url)")
+            // Pass the URL to the DeepLinkRouter
+            DeepLinkRouter.shared.handle(url: url)
+        }
+
+        // Check if the app was launched from a Universal Link
+        if let userActivityDictionary = launchOptions?[UIApplication.LaunchOptionsKey.userActivityDictionary] as? [String: Any],
+           let userActivity = userActivityDictionary["UIApplicationLaunchOptionsUserActivityKey"] as? NSUserActivity,
+           userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+           let url = userActivity.webpageURL {
+            DebugLogger.shared.log("📱 AppDelegate: Cold start with Universal Link: \(url)")
+            // Pass the URL to the DeepLinkRouter
+            DeepLinkRouter.shared.handle(url: url)
+        }
+
+        return true
+    }
+
+    // Called for Universal Links
+    func application(
+        _ application: UIApplication,
+        continue userActivity: NSUserActivity,
+        restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void
+    ) -> Bool {
+        // Check if this is a Universal Link
+        if userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+           let url = userActivity.webpageURL {
+            // Pass the URL to the DeepLinkRouter
+            DeepLinkRouter.shared.handle(url: url)
+            return true
+        }
+
+        return false
+    }
+
+    // Called when the user grants (or revokes) notification permissions
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        // Cache the APNS token for later retrieval via PushNotifications::getToken()
+        let tokenString = deviceToken.map { String(format: "%02x", $0) }.joined()
+        NativePHPSetPushTokenC(tokenString)
+
+        if FirebaseManager.shared.isConfigured {
+            // Set APNS token on Firebase so it can exchange for FCM token
+            Messaging.messaging().apnsToken = deviceToken
+            print("📱 APNS token set on Firebase Messaging")
+        }
+        // Note: Event dispatch is handled by PushNotificationFunctions.RequestPermission
+        // which explicitly fetches the FCM token after permission is granted
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        print("Failed to register for remote notifications:", error.localizedDescription)
+    }
+
+    // Handle deeplinks
+    func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+    ) -> Bool {
+        // Pass the URL to the DeepLinkRouter
+        DeepLinkRouter.shared.handle(url: url)
+        return true
+    }
+
+    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+        guard let fcmToken = fcmToken else { return }
+
+        // Cache the FCM token for PushNotifications::getToken()
+        UserDefaults.standard.set(fcmToken, forKey: "push_notification_token")
+        print("📱 FCM token received and cached: \(fcmToken.prefix(20))...")
+
+        // Note: We don't dispatch TokenGenerated here anymore.
+        // PushNotificationFunctions.RequestPermission handles dispatching after enrollment.
+        // This delegate can fire at any time (app launch, token refresh) which caused
+        // race conditions with the enrollment flow.
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    // Called when a notification is received while the app is in the foreground
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        // Display the notification even when the app is in the foreground
+        completionHandler([.banner, .sound, .badge])
+    }
+
+    // Called when user taps on a notification
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+
+        // Convert to the expected type for Laravel
+        let convertedUserInfo: [String: Any] = userInfo.compactMapValues { value in
+            return value as? String ?? String(describing: value)
+        }.reduce(into: [:]) { result, pair in
+            if let key = pair.key as? String {
+                result[key] = pair.value
+            }
+        }
+
+        // Send notification tap event to Laravel
+        LaravelBridge.shared.send?(
+            "Native\\Mobile\\Events\\PushNotification\\NotificationTapped",
+            convertedUserInfo
+        )
+
+        completionHandler()
+    }
+}
+
+------------
+
+Location: nativephp/ios/NativePHP/Info.plist
+
+Enable permissions
+
+add
+
+<key>UIBackgroundModes</key>
+<array>
+  <string>remote-notification</string>
+  <string>audio</string>
+</array>
+
+
+To
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLName</key>
+            <string>com.mediasession.app.v1</string>
+            <key>CFBundleURLSchemes</key>
+            <array/>
+        </dict>
+    </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoadsInWebContent</key>
+        <true/>
+    </dict>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>remote-notification</string>
+        <string>audio</string>
+    </array>
+    <key>UILaunchScreen</key>
+    <false/>
+</dict>
+</plist>
+
+Location: nativephp/ios/NativePHP/ContentView.swift
+
+add
+
+// Added Native.call() method to JavaScript helper:
+const Native = {
+    on: (event, callback) => { /* existing code */ },
+    call: async (functionName, params = {}) => {
+        return new Promise((resolve, reject) => {
+            const callId = 'call_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+            const timeoutId = setTimeout(() => {
+                window.removeEventListener(callId, handler);
+                reject(new Error('Native call timeout'));
+            }, 10000);
+
+            const handler = (event) => {
+                clearTimeout(timeoutId);
+                window.removeEventListener(callId, handler);
+                if (event.detail.error) {
+                    reject(new Error(event.detail.error));
+                } else {
+                    resolve(event.detail.result);
+                }
+            };
+
+            window.addEventListener(callId, handler);
+            window.webkit.messageHandlers.nativeCall.postMessage({
+                callId: callId,
+                function: functionName,
+                params: params
+            });
+        });
+    }
+};
+
+// Added NativeCallHandler class at the end of the file:
+class NativeCallHandler: NSObject, WKScriptMessageHandler {
+    weak var webView: WKWebView?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+              let callId = body["callId"] as? String,
+              let functionName = body["function"] as? String else {
+            return
+        }
+
+        let params = body["params"] as? [String: Any] ?? [:]
+
+        // Convert params to JSON and call NativePHPCall
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: params, options: []),
+              let jsonString = String(data: jsonData, encoding: .utf8) else {
+            sendResponse(callId: callId, error: "Failed to serialize parameters")
+            return
+        }
+
+        let resultJson = NativePHPCall(functionName, jsonString)
+        let resultString = String(cString: resultJson!)
+
+        // Parse and send result back to JavaScript
+        guard let resultData = resultString.data(using: .utf8),
+              let result = try? JSONSerialization.jsonObject(with: resultData, options: []) as? [String: Any] else {
+            sendResponse(callId: callId, error: "Failed to parse result")
+            return
+        }
+
+        if let error = result["error"] as? String {
+            sendResponse(callId: callId, error: error)
+        } else {
+            sendResponse(callId: callId, result: result)
+        }
+    }
+
+    private func sendResponse(callId: String, result: [String: Any]? = nil, error: String? = nil) {
+        // Sends custom event back to JavaScript with result
+    }
+}
+
+It looks like a lot but took me a couple of hours to build and understand. Its just a proof of concept. Code still needs tweaking and fine tuning. This is for IOS only.
