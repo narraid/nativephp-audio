@@ -76,7 +76,7 @@ class AudioFunctions {
             // paused is unsafe, so events are queued instead.
             NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_PAUSE) { _ ->
                 isInBackground = true
-                stopProgressTimer()
+                // stopProgressTimer()
             }
         }
 
