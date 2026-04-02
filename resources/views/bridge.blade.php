@@ -18,6 +18,10 @@
             window.dispatchEvent(new CustomEvent('audio-completed', { detail: payload }));
         }
 
+        if (name === 'Theunwindfront\\Audio\\Events\\PlaybackProgressUpdated') {
+            window.dispatchEvent(new CustomEvent('audio-progress-updated', { detail: payload }));
+        }
+
         if (name === 'Theunwindfront\\Audio\\Events\\PlaybackResumed') {
             window.dispatchEvent(new CustomEvent('audio-resumed', { detail: payload }));
         }
@@ -28,6 +32,10 @@
 
         if (name === 'Theunwindfront\\Audio\\Events\\PlaybackFailed') {
             window.dispatchEvent(new CustomEvent('audio-failed', { detail: payload }));
+        }
+
+        if (name === 'Theunwindfront\\Audio\\Events\\PlaybackLoaded') {
+            window.dispatchEvent(new CustomEvent('audio-loaded', { detail: payload }));
         }
 
         if (name === 'Theunwindfront\\Audio\\Events\\RemotePlayReceived') {
