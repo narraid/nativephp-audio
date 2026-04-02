@@ -15,6 +15,7 @@ class Audio
      * @param  string|null  $album    Album name
      * @param  string|null  $artwork  URL or local path to artwork image
      * @param  float|null   $duration Total track duration in seconds
+     * @param  array|null   $metadata Arbitrary key/value pairs passed through to native events
      */
     public function load(
         string $url,
@@ -23,6 +24,7 @@ class Audio
         ?string $album = null,
         ?string $artwork = null,
         ?float $duration = null,
+        ?array $metadata = null,
     ): bool {
         if (function_exists('nativephp_call')) {
             $params = array_filter([
@@ -32,6 +34,7 @@ class Audio
                 'album'    => $album,
                 'artwork'  => $artwork,
                 'duration' => $duration,
+                'metadata' => $metadata,
             ], fn ($v) => $v !== null);
 
             $result = nativephp_call('Audio.load', json_encode($params));
@@ -57,6 +60,7 @@ class Audio
      * @param  string|null  $album    Album name
      * @param  string|null  $artwork  URL or local path to artwork image
      * @param  float|null   $duration Total track duration in seconds
+     * @param  array|null   $metadata Arbitrary key/value pairs passed through to native events
      */
     public function play(
         string $url,
@@ -65,6 +69,7 @@ class Audio
         ?string $album = null,
         ?string $artwork = null,
         ?float $duration = null,
+        ?array $metadata = null,
     ): bool {
         if (function_exists('nativephp_call')) {
             $params = array_filter([
@@ -74,6 +79,7 @@ class Audio
                 'album'    => $album,
                 'artwork'  => $artwork,
                 'duration' => $duration,
+                'metadata' => $metadata,
             ], fn ($v) => $v !== null);
 
             $result = nativephp_call('Audio.play', json_encode($params));

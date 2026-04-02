@@ -39,6 +39,7 @@ class AudioFunctions {
         private var metaDurationMs: Long? = null
         private var metaArtworkSource: String? = null
         internal var currentArtwork: Bitmap? = null
+        private var metaMetadata: Map<String, Any>? = null
 
         // ── Audio Focus ───────────────────────────────────────────────────────
         private const val DUCK_FACTOR = 0.2f
@@ -375,13 +376,16 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
 
-            val params   = JSONObject(parameters)
-            val url      = params.optString("url")
-            val title    = params.optString("title").takeIf { it.isNotEmpty() }
-            val artist   = params.optString("artist").takeIf { it.isNotEmpty() }
-            val album    = params.optString("album").takeIf { it.isNotEmpty() }
-            val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
-            val duration = if (params.has("duration")) params.optDouble("duration") else null
+            val params    = JSONObject(parameters)
+            val url       = params.optString("url")
+            val title     = params.optString("title").takeIf { it.isNotEmpty() }
+            val artist    = params.optString("artist").takeIf { it.isNotEmpty() }
+            val album     = params.optString("album").takeIf { it.isNotEmpty() }
+            val artwork   = params.optString("artwork").takeIf { it.isNotEmpty() }
+            val duration  = if (params.has("duration")) params.optDouble("duration") else null
+            val metadata  = params.optJSONObject("metadata")?.let { obj ->
+                obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
+            }
 
             currentUrl = url
 
@@ -391,6 +395,7 @@ class AudioFunctions {
                 metaAlbum         = album
                 metaDurationMs    = duration?.let { (it * 1000).toLong() }
                 metaArtworkSource = artwork
+                metaMetadata      = metadata
             }
 
             // All MediaPlayer work must happen on the main thread to avoid race conditions
@@ -423,6 +428,7 @@ class AudioFunctions {
                             artist?.let   { payload["artist"]   = it }
                             album?.let    { payload["album"]    = it }
                             duration?.let { payload["duration"] = it }
+                            metadata?.let { payload["metadata"] = it }
                             sendEvent("PlaybackLoaded", payload)
                         }
 
@@ -458,13 +464,16 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
 
-            val params   = JSONObject(parameters)
-            val url      = params.optString("url")
-            val title    = params.optString("title").takeIf { it.isNotEmpty() }
-            val artist   = params.optString("artist").takeIf { it.isNotEmpty() }
-            val album    = params.optString("album").takeIf { it.isNotEmpty() }
-            val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
-            val duration = if (params.has("duration")) params.optDouble("duration") else null
+            val params    = JSONObject(parameters)
+            val url       = params.optString("url")
+            val title     = params.optString("title").takeIf { it.isNotEmpty() }
+            val artist    = params.optString("artist").takeIf { it.isNotEmpty() }
+            val album     = params.optString("album").takeIf { it.isNotEmpty() }
+            val artwork   = params.optString("artwork").takeIf { it.isNotEmpty() }
+            val duration  = if (params.has("duration")) params.optDouble("duration") else null
+            val metadata  = params.optJSONObject("metadata")?.let { obj ->
+                obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
+            }
 
             currentUrl = url
 
@@ -475,6 +484,7 @@ class AudioFunctions {
                 metaAlbum         = album
                 metaDurationMs    = duration?.let { (it * 1000).toLong() }
                 metaArtworkSource = artwork
+                metaMetadata      = metadata
             }
 
             // All MediaPlayer work must happen on the main thread to avoid race conditions
@@ -514,6 +524,7 @@ class AudioFunctions {
                             artist?.let   { payload["artist"]   = it }
                             album?.let    { payload["album"]    = it }
                             duration?.let { payload["duration"] = it }
+                            metadata?.let { payload["metadata"] = it }
                             sendEvent("PlaybackStarted", payload)
                         }
 

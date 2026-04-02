@@ -451,4 +451,18 @@ Changes made:
    - Resets timer on Pause, Resume, and Seek                                                                                                                                                                                                                             
    - Stops timer on PlaybackCompleted and PlaybackFailed
    - Stop on Stop was already handled via releasePlayer()                                                                                                                                                                                                                
-   - Updated ON_RESUME lifecycle to use the default constant        
+   - Updated ON_RESUME lifecycle to use the default constant
+
+   All changes made. Here's a summary of what was updated on each platform:
+
+Android (AudioFunctions.kt)
+- Added metaMetadata: Map<String, Any>? to stored metadata fields
+- In both Load and Play: parse metadata from the JSON payload via optJSONObject("metadata")
+- Store metaMetadata = metadata alongside the other meta fields when title != null
+- Append metadata?.let { payload["metadata"] = it } to both PlaybackLoaded and PlaybackStarted event payloads
+
+iOS (AudioFunctions.swift)
+- Added metaMetadata: [String: Any]? to stored metadata fields
+- Added metadata: [String: Any]? parameter to preparePlayer and stores it in metaMetadata when title != nil
+- In both Load and Play: parse metadata = parameters["metadata"] as? [String: Any]
+- Pass it through to preparePlayer and append if let m = metadata { payload["metadata"] = m } to both PlaybackLoaded and PlaybackStarted event payloads        

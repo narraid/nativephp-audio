@@ -17,6 +17,7 @@ enum AudioFunctions {
     private static var metaAlbum: String?
     private static var metaDuration: Double?
     private static var metaArtworkSource: String?
+    private static var metaMetadata: [String: Any]?
 
     // MARK: - Observers
 
@@ -347,7 +348,7 @@ enum AudioFunctions {
      * Shared helper that sets up the AVPlayer with a URL and metadata
      * but does NOT start playback. Used by both Load and Play.
      */
-    private static func preparePlayer(urlString: String, url: URL, title: String?, artist: String?, album: String?, artwork: String?, duration: Double?) {
+    private static func preparePlayer(urlString: String, url: URL, title: String?, artist: String?, album: String?, artwork: String?, duration: Double?, metadata: [String: Any]?) {
         // Stop progress timer BEFORE replacing the player — removeTimeObserver must be
         // called on the same AVPlayer instance that added it, otherwise it crashes.
         stopProgressTimer()
@@ -369,6 +370,7 @@ enum AudioFunctions {
             metaAlbum         = album
             metaDuration      = duration
             metaArtworkSource = artwork
+            metaMetadata      = metadata
         }
 
         playerItem = AVPlayerItem(url: url)
@@ -412,8 +414,9 @@ enum AudioFunctions {
             let album    = parameters["album"]    as? String
             let artwork  = parameters["artwork"]  as? String
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
+            let metadata = parameters["metadata"] as? [String: Any]
 
-            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration)
+            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration, metadata: metadata)
 
             // Do NOT call player?.play() — audio is loaded but paused.
             AudioFunctions.syncNowPlayingState()
@@ -423,6 +426,7 @@ enum AudioFunctions {
             if let a = artist   { loadedPayload["artist"]   = a }
             if let a = album    { loadedPayload["album"]    = a }
             if let d = duration { loadedPayload["duration"] = d }
+            if let m = metadata { loadedPayload["metadata"] = m }
             AudioFunctions.sendEvent("PlaybackLoaded", loadedPayload)
 
             return BridgeResponse.success(data: ["success": true])
@@ -441,8 +445,9 @@ enum AudioFunctions {
             let album    = parameters["album"]    as? String
             let artwork  = parameters["artwork"]  as? String
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
+            let metadata = parameters["metadata"] as? [String: Any]
 
-            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration)
+            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration, metadata: metadata)
 
             AudioFunctions.player?.play()
             // Sync rate/elapsed after play() so the lock screen shows the correct state.
@@ -454,6 +459,7 @@ enum AudioFunctions {
             if let a = artist   { startedPayload["artist"]   = a }
             if let a = album    { startedPayload["album"]    = a }
             if let d = duration { startedPayload["duration"] = d }
+            if let m = metadata { startedPayload["metadata"] = m }
             AudioFunctions.sendEvent("PlaybackStarted", startedPayload)
 
             return BridgeResponse.success(data: ["success": true])
