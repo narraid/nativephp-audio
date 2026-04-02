@@ -50,7 +50,25 @@ const audioPlayer = {
         if (artwork !== null) params.artwork = artwork;
         if (duration !== null) params.duration = duration;
         return await window.nativephp.call('Audio.setMetadata', params);
-    }
+    },
+    setPlaylist: async (items, { autoPlay = true, startIndex = 0 } = {}) => {
+        return await window.nativephp.call('Audio.setPlaylist', { items, autoPlay, startIndex });
+    },
+    nextTrack: async () => {
+        return await window.nativephp.call('Audio.nextTrack');
+    },
+    previousTrack: async () => {
+        return await window.nativephp.call('Audio.previousTrack');
+    },
+    getPlaylist: async () => {
+        return await window.nativephp.call('Audio.getPlaylist');
+    },
+    setRepeatMode: async (mode) => {
+        return await window.nativephp.call('Audio.setRepeatMode', { mode });
+    },
+    setShuffleMode: async (shuffle) => {
+        return await window.nativephp.call('Audio.setShuffleMode', { shuffle });
+    },
 };
 
 export default audioPlayer;

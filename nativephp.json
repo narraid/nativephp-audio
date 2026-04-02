@@ -73,6 +73,42 @@
             "android": "com.narraid.audio.AudioFunctions.DrainEvents",
             "ios": "AudioFunctions.DrainEvents",
             "description": "Return and clear all events queued while the app was in the background"
+        },
+        {
+            "name": "Audio.setPlaylist",
+            "android": "com.narraid.audio.AudioFunctions.SetPlaylist",
+            "ios": "AudioFunctions.SetPlaylist",
+            "description": "Set the playlist queue natively so tracks auto-advance in the background"
+        },
+        {
+            "name": "Audio.nextTrack",
+            "android": "com.narraid.audio.AudioFunctions.NextTrack",
+            "ios": "AudioFunctions.NextTrack",
+            "description": "Skip to the next track in the active playlist"
+        },
+        {
+            "name": "Audio.previousTrack",
+            "android": "com.narraid.audio.AudioFunctions.PreviousTrack",
+            "ios": "AudioFunctions.PreviousTrack",
+            "description": "Skip to the previous track in the active playlist"
+        },
+        {
+            "name": "Audio.getPlaylist",
+            "android": "com.narraid.audio.AudioFunctions.GetPlaylist",
+            "ios": "AudioFunctions.GetPlaylist",
+            "description": "Get the current playlist state (items, index, total, repeatMode, shuffleMode)"
+        },
+        {
+            "name": "Audio.setRepeatMode",
+            "android": "com.narraid.audio.AudioFunctions.SetRepeatMode",
+            "ios": "AudioFunctions.SetRepeatMode",
+            "description": "Set the repeat mode: none, one (repeat current track), all (repeat playlist)"
+        },
+        {
+            "name": "Audio.setShuffleMode",
+            "android": "com.narraid.audio.AudioFunctions.SetShuffleMode",
+            "ios": "AudioFunctions.SetShuffleMode",
+            "description": "Enable or disable shuffle mode for the active playlist"
         }
     ],
 
@@ -135,7 +171,10 @@
         "Narraid\\Audio\\Events\\AudioFocusLost",
         "Narraid\\Audio\\Events\\AudioFocusLostTransient",
         "Narraid\\Audio\\Events\\AudioFocusDucked",
-        "Narraid\\Audio\\Events\\AudioFocusGained"
+        "Narraid\\Audio\\Events\\AudioFocusGained",
+        "Narraid\\Audio\\Events\\PlaylistSet",
+        "Narraid\\Audio\\Events\\PlaylistTrackChanged",
+        "Narraid\\Audio\\Events\\PlaylistEnded"
     ],
 
     "hooks": {}

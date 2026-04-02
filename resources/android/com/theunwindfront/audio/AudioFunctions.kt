@@ -58,6 +58,16 @@ class AudioFunctions {
         private var progressRunnable: Runnable? = null
         private var progressIntervalMs: Long = 0
 
+        // ── Playlist State ────────────────────────────────────────────────────
+        private val playlist: MutableList<Map<String, Any>> = mutableListOf()
+        private var playlistIndex: Int = -1
+        private var repeatMode: String = "none"
+        private var shuffleMode: Boolean = false
+        private val shuffledOrder: MutableList<Int> = mutableListOf()
+
+        // ── Application Context (for background playback) ─────────────────────
+        private var appContext: Context? = null
+
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
         init {
@@ -190,10 +200,20 @@ class AudioFunctions {
                     }
 
                     override fun onSkipToNext() {
+                        if (playlist.isNotEmpty()) {
+                            val nextIndex = if (repeatMode == "all")
+                                (playlistIndex + 1) % playlist.size
+                            else
+                                minOf(playlistIndex + 1, playlist.size - 1)
+                            playTrackAt(nextIndex)
+                        }
                         sendEvent("RemoteNextTrackReceived", statePayload())
                     }
 
                     override fun onSkipToPrevious() {
+                        if (playlist.isNotEmpty()) {
+                            playTrackAt(maxOf(0, playlistIndex - 1))
+                        }
                         sendEvent("RemotePreviousTrackReceived", statePayload())
                     }
 
@@ -364,6 +384,119 @@ class AudioFunctions {
             progressRunnable = null
         }
 
+        // ── Playlist Navigation ───────────────────────────────────────────────
+
+        private fun effectiveTrackIndex(logicalIndex: Int): Int =
+            if (shuffledOrder.isNotEmpty()) shuffledOrder[logicalIndex] else logicalIndex
+
+        internal fun playTrackAt(index: Int) {
+            if (index < 0 || index >= playlist.size) return
+            val context: Context = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
+                ?: appContext ?: return
+
+            playlistIndex = index
+            val track  = playlist[effectiveTrackIndex(index)]
+            val url    = track["url"] as? String ?: return
+            val title  = track["title"]  as? String
+            val artist = track["artist"] as? String
+            val album  = track["album"]  as? String
+            val artwork = track["artwork"] as? String
+            val duration = (track["duration"] as? Number)?.toDouble()
+            @Suppress("UNCHECKED_CAST")
+            val metadata = track["metadata"] as? Map<String, Any>
+
+            currentUrl = url
+            if (title != null) {
+                metaTitle         = title
+                metaArtist        = artist
+                metaAlbum         = album
+                metaDurationMs    = duration?.let { (it * 1000).toLong() }
+                metaArtworkSource = artwork
+                metaMetadata      = metadata
+            }
+
+            Handler(Looper.getMainLooper()).post {
+                stopProgressTimer()
+                try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
+                mediaPlayer?.release()
+                mediaPlayer = null
+
+                if (metaTitle != null) applySessionMetadata(context)
+
+                try {
+                    mediaPlayer = MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .build()
+                        )
+                        setDataSource(context, Uri.parse(url))
+
+                        setOnPreparedListener { mp ->
+                            requestAudioFocus(context)
+                            mp.start()
+                            updateSessionState()
+                            startProgressTimer(DEFAULT_PROGRESS_INTERVAL_MS)
+                            AudioService.start(context, metaTitle ?: "Now Playing", metaArtist)
+
+                            val trackChangedPayload = mutableMapOf<String, Any>(
+                                "index" to index, "total" to playlist.size, "url" to url
+                            )
+                            title?.let    { trackChangedPayload["title"]    = it }
+                            artist?.let   { trackChangedPayload["artist"]   = it }
+                            album?.let    { trackChangedPayload["album"]    = it }
+                            duration?.let { trackChangedPayload["duration"] = it }
+                            metadata?.let { trackChangedPayload["metadata"] = it }
+                            sendEvent("PlaylistTrackChanged", trackChangedPayload)
+
+                            val startedPayload = mutableMapOf<String, Any>("url" to url)
+                            title?.let    { startedPayload["title"]    = it }
+                            artist?.let   { startedPayload["artist"]   = it }
+                            album?.let    { startedPayload["album"]    = it }
+                            duration?.let { startedPayload["duration"] = it }
+                            metadata?.let { startedPayload["metadata"] = it }
+                            sendEvent("PlaybackStarted", startedPayload)
+                        }
+
+                        setOnCompletionListener {
+                            stopProgressTimer()
+                            sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()))
+                            advancePlaylist()
+                        }
+
+                        setOnErrorListener { _, what, extra ->
+                            stopProgressTimer()
+                            sendEvent("PlaybackFailed", mapOf(
+                                "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
+                            ))
+                            false
+                        }
+
+                        prepareAsync()
+                    }
+                } catch (e: Exception) {
+                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")))
+                }
+            }
+        }
+
+        private fun advancePlaylist() {
+            if (playlist.isEmpty()) return
+            when (repeatMode) {
+                "one" -> playTrackAt(playlistIndex)
+                "all" -> playTrackAt((playlistIndex + 1) % playlist.size)
+                else  -> {
+                    val next = playlistIndex + 1
+                    if (next < playlist.size) {
+                        playTrackAt(next)
+                    } else {
+                        sendEvent("PlaylistEnded", mapOf("total" to playlist.size))
+                    }
+                }
+            }
+        }
+
         // ── Cleanup ───────────────────────────────────────────────────────────
 
         /**
@@ -386,6 +519,10 @@ class AudioFunctions {
     class Load(private val activity: FragmentActivity) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
+            appContext  = activity.applicationContext
+
+            playlist.clear()
+            playlistIndex = -1
 
             val params    = JSONObject(parameters)
             val url       = params.optString("url")
@@ -448,6 +585,7 @@ class AudioFunctions {
                             sendEvent("PlaybackCompleted", mapOf(
                                 "url" to currentUrl, "duration" to durationSeconds()
                             ))
+                            advancePlaylist()
                         }
 
                         setOnErrorListener { _, what, extra ->
@@ -474,6 +612,10 @@ class AudioFunctions {
     class Play(private val activity: FragmentActivity) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
+            appContext  = activity.applicationContext
+
+            playlist.clear()
+            playlistIndex = -1
 
             val params    = JSONObject(parameters)
             val url       = params.optString("url")
@@ -544,6 +686,7 @@ class AudioFunctions {
                             sendEvent("PlaybackCompleted", mapOf(
                                 "url" to currentUrl, "duration" to durationSeconds()
                             ))
+                            advancePlaylist()
                         }
 
                         setOnErrorListener { _, what, extra ->
@@ -701,6 +844,127 @@ class AudioFunctions {
                 AudioService.updateNotification(context, title, metaArtist)
             }
 
+            return mapOf("success" to true)
+        }
+    }
+
+    /**
+     * Sets the playlist queue natively so tracks auto-advance in the background.
+     * Each item must have a "url" key; title/artist/album/artwork/duration/metadata are optional.
+     * Pass autoPlay: false to load the queue without starting playback immediately.
+     * Pass startIndex to begin at a specific track (default: 0).
+     */
+    class SetPlaylist(private val activity: FragmentActivity) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            activityRef = WeakReference(activity)
+            appContext  = activity.applicationContext
+
+            val params    = JSONObject(parameters)
+            val itemsJson = params.optJSONArray("items")
+                ?: return mapOf("success" to false, "error" to "items array is required")
+
+            if (itemsJson.length() == 0) {
+                return mapOf("success" to false, "error" to "items array must not be empty")
+            }
+
+            playlist.clear()
+            for (i in 0 until itemsJson.length()) {
+                val item  = itemsJson.getJSONObject(i)
+                val track = mutableMapOf<String, Any>()
+                item.keys().forEach { key -> track[key] = item.get(key) }
+                playlist.add(track)
+            }
+            playlistIndex = -1
+
+            if (shuffleMode) {
+                shuffledOrder.clear()
+                shuffledOrder.addAll((0 until playlist.size).toMutableList().also { it.shuffle() })
+            } else {
+                shuffledOrder.clear()
+            }
+
+            val autoPlay   = params.optBoolean("autoPlay", true)
+            val startIndex = params.optInt("startIndex", 0)
+
+            sendEvent("PlaylistSet", mapOf("total" to playlist.size))
+
+            if (autoPlay) playTrackAt(startIndex)
+
+            return mapOf("success" to true)
+        }
+    }
+
+    /**
+     * Skips to the next track in the active playlist.
+     */
+    class NextTrack(private val activity: FragmentActivity) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            activityRef = WeakReference(activity)
+            if (playlist.isEmpty()) return mapOf("success" to false, "error" to "No playlist is active")
+            val nextIndex = if (repeatMode == "all")
+                (playlistIndex + 1) % playlist.size
+            else
+                minOf(playlistIndex + 1, playlist.size - 1)
+            playTrackAt(nextIndex)
+            return mapOf("success" to true)
+        }
+    }
+
+    /**
+     * Skips to the previous track in the active playlist.
+     */
+    class PreviousTrack(private val activity: FragmentActivity) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            activityRef = WeakReference(activity)
+            if (playlist.isEmpty()) return mapOf("success" to false, "error" to "No playlist is active")
+            playTrackAt(maxOf(0, playlistIndex - 1))
+            return mapOf("success" to true)
+        }
+    }
+
+    /**
+     * Returns the current playlist queue and playback state.
+     */
+    class GetPlaylist(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            return mapOf(
+                "success"     to true,
+                "items"       to playlist.toList(),
+                "index"       to playlistIndex,
+                "total"       to playlist.size,
+                "repeatMode"  to repeatMode,
+                "shuffleMode" to shuffleMode,
+            )
+        }
+    }
+
+    /**
+     * Sets the repeat mode: "none" (default), "one" (repeat current), "all" (repeat playlist).
+     */
+    class SetRepeatMode(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val mode = JSONObject(parameters).optString("mode", "none")
+            if (mode !in listOf("none", "one", "all")) {
+                return mapOf("success" to false, "error" to "mode must be 'none', 'one', or 'all'")
+            }
+            repeatMode = mode
+            return mapOf("success" to true)
+        }
+    }
+
+    /**
+     * Enables or disables shuffle mode. When enabled, a new random play order is generated.
+     */
+    class SetShuffleMode(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val shuffle = JSONObject(parameters).optBoolean("shuffle", false)
+            shuffleMode = shuffle
+            if (shuffle && playlist.isNotEmpty()) {
+                shuffledOrder.clear()
+                shuffledOrder.addAll((0 until playlist.size).toMutableList().also { it.shuffle() })
+            } else {
+                shuffledOrder.clear()
+            }
             return mapOf("success" to true)
         }
     }

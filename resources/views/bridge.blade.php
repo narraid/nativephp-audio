@@ -77,5 +77,17 @@
         if (name === 'Narraid\\Audio\\Events\\AudioFocusGained') {
             window.dispatchEvent(new CustomEvent('audio-focus-gained', { detail: payload }));
         }
+
+        if (name === 'Narraid\\Audio\\Events\\PlaylistSet') {
+            window.dispatchEvent(new CustomEvent('audio-playlist-set', { detail: payload }));
+        }
+
+        if (name === 'Narraid\\Audio\\Events\\PlaylistTrackChanged') {
+            window.dispatchEvent(new CustomEvent('audio-playlist-track-changed', { detail: payload }));
+        }
+
+        if (name === 'Narraid\\Audio\\Events\\PlaylistEnded') {
+            window.dispatchEvent(new CustomEvent('audio-playlist-ended', { detail: payload }));
+        }
     });
 </script>

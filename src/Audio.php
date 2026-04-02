@@ -275,6 +275,129 @@ class Audio
     }
 
     /**
+     * Set the playlist queue natively so tracks auto-advance in the background on both iOS and Android.
+     *
+     * Each item in $items must have a 'url' key. Optional keys per item:
+     *   title, artist, album, artwork, duration, metadata
+     *
+     * @param  array  $items       Array of track objects
+     * @param  bool   $autoPlay    Start playing immediately (default true)
+     * @param  int    $startIndex  Index of the track to start from (default 0)
+     */
+    public function setPlaylist(array $items, bool $autoPlay = true, int $startIndex = 0): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.setPlaylist', json_encode([
+                'items'      => $items,
+                'autoPlay'   => $autoPlay,
+                'startIndex' => $startIndex,
+            ]));
+
+            if ($result) {
+                $decoded = json_decode($result);
+
+                return $decoded->success ?? false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Skip to the next track in the active playlist
+     */
+    public function nextTrack(): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.nextTrack', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result);
+
+                return $decoded->success ?? false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Skip to the previous track in the active playlist
+     */
+    public function previousTrack(): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.previousTrack', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result);
+
+                return $decoded->success ?? false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get the current playlist state: items, index, total, repeatMode, shuffleMode
+     */
+    public function getPlaylist(): ?array
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.getPlaylist', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return is_array($decoded) ? $decoded : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Set the repeat mode for the active playlist
+     *
+     * @param  string  $mode  'none' (default), 'one' (repeat current track), 'all' (repeat playlist)
+     */
+    public function setRepeatMode(string $mode): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.setRepeatMode', json_encode(['mode' => $mode]));
+
+            if ($result) {
+                $decoded = json_decode($result);
+
+                return $decoded->success ?? false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Enable or disable shuffle mode for the active playlist
+     *
+     * @param  bool  $shuffle  true to shuffle, false to play in order
+     */
+    public function setShuffleMode(bool $shuffle): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.setShuffleMode', json_encode(['shuffle' => $shuffle]));
+
+            if ($result) {
+                $decoded = json_decode($result);
+
+                return $decoded->success ?? false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
      *
      * @param  string       $title    Track title

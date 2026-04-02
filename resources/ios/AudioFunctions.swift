@@ -34,6 +34,14 @@ enum AudioFunctions {
     private static var backgroundObserversRegistered = false
     private static var pausedByFocusLoss = false
 
+    // MARK: - Playlist State
+
+    private static var playlist: [[String: Any]] = []
+    private static var playlistIndex: Int = -1
+    private static var repeatMode: String = "none"
+    private static var shuffleMode: Bool = false
+    private static var shuffledOrder: [Int] = []
+
     // MARK: - Background Event Queue
 
     private static var isInBackground = false
@@ -203,6 +211,68 @@ enum AudioFunctions {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
+    // MARK: - Playlist Navigation
+
+    private static func effectivePlaylistIndex(for logicalIndex: Int) -> Int {
+        guard !shuffledOrder.isEmpty, logicalIndex < shuffledOrder.count else { return logicalIndex }
+        return shuffledOrder[logicalIndex]
+    }
+
+    private static func playTrackAt(index: Int) {
+        guard index >= 0, index < playlist.count else { return }
+        playlistIndex = index
+        let track = playlist[effectivePlaylistIndex(for: index)]
+
+        guard let urlString = track["url"] as? String,
+              let url = URL(string: urlString) else { return }
+
+        let title    = track["title"]    as? String
+        let artist   = track["artist"]   as? String
+        let album    = track["album"]    as? String
+        let artwork  = track["artwork"]  as? String
+        let duration = (track["duration"] as? NSNumber)?.doubleValue
+        let metadata = track["metadata"] as? [String: Any]
+
+        preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
+                      album: album, artwork: artwork, duration: duration, metadata: metadata)
+        player?.play()
+        syncNowPlayingState()
+        startProgressTimer(interval: defaultProgressInterval)
+
+        var trackChangedPayload: [String: Any] = ["index": index, "total": playlist.count, "url": urlString]
+        if let t = title    { trackChangedPayload["title"]    = t }
+        if let a = artist   { trackChangedPayload["artist"]   = a }
+        if let a = album    { trackChangedPayload["album"]    = a }
+        if let d = duration { trackChangedPayload["duration"] = d }
+        if let m = metadata { trackChangedPayload["metadata"] = m }
+        sendEvent("PlaylistTrackChanged", trackChangedPayload)
+
+        var startedPayload: [String: Any] = ["url": urlString]
+        if let t = title    { startedPayload["title"]    = t }
+        if let a = artist   { startedPayload["artist"]   = a }
+        if let a = album    { startedPayload["album"]    = a }
+        if let d = duration { startedPayload["duration"] = d }
+        if let m = metadata { startedPayload["metadata"] = m }
+        sendEvent("PlaybackStarted", startedPayload)
+    }
+
+    private static func advancePlaylist() {
+        guard !playlist.isEmpty else { return }
+        switch repeatMode {
+        case "one":
+            playTrackAt(index: playlistIndex)
+        case "all":
+            playTrackAt(index: (playlistIndex + 1) % playlist.count)
+        default:
+            let next = playlistIndex + 1
+            if next < playlist.count {
+                playTrackAt(index: next)
+            } else {
+                sendEvent("PlaylistEnded", ["total": playlist.count])
+            }
+        }
+    }
+
     // MARK: - Progress Timer
 
     static func startProgressTimer(interval: Double) {
@@ -274,12 +344,21 @@ enum AudioFunctions {
 
         center.nextTrackCommand.isEnabled = true
         center.nextTrackCommand.addTarget { _ in
+            if !playlist.isEmpty {
+                let nextIndex = repeatMode == "all"
+                    ? (playlistIndex + 1) % playlist.count
+                    : min(playlistIndex + 1, playlist.count - 1)
+                playTrackAt(index: nextIndex)
+            }
             sendEvent("RemoteNextTrackReceived", statePayload())
             return .success
         }
 
         center.previousTrackCommand.isEnabled = true
         center.previousTrackCommand.addTarget { _ in
+            if !playlist.isEmpty {
+                playTrackAt(index: max(0, playlistIndex - 1))
+            }
             sendEvent("RemotePreviousTrackReceived", statePayload())
             return .success
         }
@@ -418,6 +497,7 @@ enum AudioFunctions {
             sendEvent("PlaybackCompleted", [
                 "url": urlString, "duration": durationSeconds()
             ])
+            advancePlaylist()
         }
 
         // Failure observer
@@ -438,6 +518,9 @@ enum AudioFunctions {
                   let url = URL(string: urlString) else {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
+
+            AudioFunctions.playlist      = []
+            AudioFunctions.playlistIndex = -1
 
             let title    = parameters["title"]    as? String
             let artist   = parameters["artist"]   as? String
@@ -469,6 +552,9 @@ enum AudioFunctions {
                   let url = URL(string: urlString) else {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
+
+            AudioFunctions.playlist      = []
+            AudioFunctions.playlistIndex = -1
 
             let title    = parameters["title"]    as? String
             let artist   = parameters["artist"]   as? String
@@ -630,6 +716,114 @@ enum AudioFunctions {
                 AudioFunctions.refreshNowPlayingInfo()
             }
 
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    /**
+     * Sets the playlist queue natively so tracks auto-advance in the background.
+     * Each item must have a "url" key; title/artist/album/artwork/duration/metadata are optional.
+     * Pass autoPlay: false to load the queue without starting playback immediately.
+     * Pass startIndex to begin at a specific track (default: 0).
+     */
+    class SetPlaylist: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let items = parameters["items"] as? [[String: Any]], !items.isEmpty else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "items must be a non-empty array of track objects.")
+            }
+
+            let autoPlay   = parameters["autoPlay"]   as? Bool ?? true
+            let startIndex = (parameters["startIndex"] as? NSNumber)?.intValue ?? 0
+
+            AudioFunctions.playlist      = items
+            AudioFunctions.playlistIndex = -1
+
+            if AudioFunctions.shuffleMode {
+                AudioFunctions.shuffledOrder = Array(0..<items.count).shuffled()
+            } else {
+                AudioFunctions.shuffledOrder = []
+            }
+
+            AudioFunctions.sendEvent("PlaylistSet", ["total": items.count])
+
+            if autoPlay {
+                AudioFunctions.playTrackAt(index: startIndex)
+            }
+
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    /**
+     * Skips to the next track in the active playlist.
+     */
+    class NextTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard !AudioFunctions.playlist.isEmpty else {
+                return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
+            }
+            let nextIndex = AudioFunctions.repeatMode == "all"
+                ? (AudioFunctions.playlistIndex + 1) % AudioFunctions.playlist.count
+                : min(AudioFunctions.playlistIndex + 1, AudioFunctions.playlist.count - 1)
+            AudioFunctions.playTrackAt(index: nextIndex)
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    /**
+     * Skips to the previous track in the active playlist.
+     */
+    class PreviousTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard !AudioFunctions.playlist.isEmpty else {
+                return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
+            }
+            AudioFunctions.playTrackAt(index: max(0, AudioFunctions.playlistIndex - 1))
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    /**
+     * Returns the current playlist queue and playback state.
+     */
+    class GetPlaylist: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            return BridgeResponse.success(data: [
+                "items":       AudioFunctions.playlist,
+                "index":       AudioFunctions.playlistIndex,
+                "total":       AudioFunctions.playlist.count,
+                "repeatMode":  AudioFunctions.repeatMode,
+                "shuffleMode": AudioFunctions.shuffleMode,
+            ])
+        }
+    }
+
+    /**
+     * Sets the repeat mode: "none" (default), "one" (repeat current track), "all" (repeat playlist).
+     */
+    class SetRepeatMode: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let mode = parameters["mode"] as? String ?? "none"
+            guard ["none", "one", "all"].contains(mode) else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "mode must be 'none', 'one', or 'all'.")
+            }
+            AudioFunctions.repeatMode = mode
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    /**
+     * Enables or disables shuffle mode. When enabled, a new random play order is generated.
+     */
+    class SetShuffleMode: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let shuffle = parameters["shuffle"] as? Bool ?? false
+            AudioFunctions.shuffleMode = shuffle
+            if shuffle, !AudioFunctions.playlist.isEmpty {
+                AudioFunctions.shuffledOrder = Array(0..<AudioFunctions.playlist.count).shuffled()
+            } else {
+                AudioFunctions.shuffledOrder = []
+            }
             return BridgeResponse.success(data: ["success": true])
         }
     }

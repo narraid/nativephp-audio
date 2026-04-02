@@ -498,3 +498,99 @@ match ($queued['event']) {
 }
 
 Call Audio::drainEvents() in your Livewire component's mount() or wherever you handle app resume — all missed events will be returned and the queue cleared.
+
+
+ ---                                                                                     
+What was built
+
+How it works
+
+The playlist queue is managed entirely in native code (Swift/Kotlin). When a track completes, the native layer picks the next track from its internal queue and plays it directly — no   
+round trip to PHP required. This means playlist auto-advance works in the background on both iOS and Android.
+
+New PHP API
+
+Audio::setPlaylist($items, autoPlay: true, startIndex: 0)                                                                                                                                
+Audio::nextTrack()                                                                                                                                                                       
+Audio::previousTrack()
+Audio::getPlaylist()           // returns items, index, total, repeatMode, shuffleMode                                                                                                   
+Audio::setRepeatMode('none')  // 'none' | 'one' | 'all'                                                                                                                                  
+Audio::setShuffleMode(true)
+
+Each item in $items needs url, and optionally title, artist, album, artwork, duration, metadata.
+
+New Events
+
+┌──────────────────────┬───────────────────────────────────┬────────────────────────────────────────┐                                                                                    
+│        Event         │              Payload              │               Fired when               │
+├──────────────────────┼───────────────────────────────────┼────────────────────────────────────────┤                                                                                    
+│ PlaylistSet          │ total                             │ setPlaylist() is called                │                                                                                  
+├──────────────────────┼───────────────────────────────────┼────────────────────────────────────────┤
+│ PlaylistTrackChanged │ index, total, url, track metadata │ Auto-advance or skip to next/previous  │                                                                                    
+├──────────────────────┼───────────────────────────────────┼────────────────────────────────────────┤                                                                                    
+│ PlaylistEnded        │ total                             │ All tracks played with repeatMode=none │                                                                                    
+└──────────────────────┴───────────────────────────────────┴────────────────────────────────────────┘
+
+Custom DOM events in JS: audio-playlist-set, audio-playlist-track-changed, audio-playlist-ended.
+
+Key behaviour
+
+- Calling Audio::play() or Audio::load() directly clears the active playlist
+- Lock screen / Bluetooth next/previous buttons navigate the playlist natively
+- Shuffle generates a random play order at setPlaylist/setShuffleMode time
+- stopProgressTimer() was already commented out in ON_PAUSE on Android (kept as-is) so progress continues while backgrounded        
+
+Here's an example of the tracks array for setPlaylist():
+
+PHP:
+Audio::setPlaylist([
+[
+'url'      => 'https://example.com/track1.mp3',
+'title'    => 'Song One',
+'artist'   => 'Artist Name',
+'album'    => 'Album Title',
+'artwork'  => 'https://example.com/cover.jpg',
+'duration' => 213.5,
+],
+[
+'url'      => 'https://example.com/track2.mp3',
+'title'    => 'Song Two',
+'artist'   => 'Artist Name',
+'album'    => 'Album Title',
+'artwork'  => 'https://example.com/cover2.jpg',
+'duration' => 187.0,
+],
+[
+'url'   => 'https://example.com/track3.mp3',
+'title' => 'Song Three',
+// artist, album, artwork, duration are all optional
+],
+]);
+
+JavaScript:
+await audioPlayer.setPlaylist([
+{                          
+url:      'https://example.com/track1.mp3',                                                                                                                                      
+title:    'Song One',                      
+artist:   'Artist Name',                                                                                                                                                         
+album:    'Album Title',                          
+artwork:  'https://example.com/cover.jpg',
+duration: 213.5,                                                                                                                                                                 
+},                  
+{                                                                                                                                                                                    
+url:    'https://example.com/track2.mp3',         
+title:  'Song Two',                      
+artist: 'Artist Name',
+},                                                                                                                                                                                   
+], { autoPlay: true, startIndex: 0 });
+
+Only url is required per track. Everything else is optional but recommended — title, artist, artwork populate the lock screen and notification controls.
+
+You can also pass arbitrary extra data via metadata:                                                                                                                                     
+[                                                                                                                                                                                        
+'url'      => 'https://example.com/track1.mp3',                                                                                                                                      
+'title'    => 'Song One',                                                                                                                                                            
+'metadata' => ['id' => 42, 'genre' => 'rock'],
+]
+
+That metadata comes back in PlaylistTrackChanged so you can identify which track is playing in your Laravel listeners.
