@@ -225,6 +225,56 @@ class Audio
     }
 
     /**
+     * Get the full current playback state from the native audio layer.
+     *
+     * Returns an associative array with keys:
+     *   url, position, duration, isPlaying, hasPlayer, title, artist, album, artwork
+     *
+     * Returns null when not running inside a NativePHP app or the call fails.
+     */
+    public function getState(): ?array
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.getState', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return is_array($decoded) ? $decoded : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Drain all events that were queued while the app was in the background.
+     *
+     * Events are stored natively when PHP cannot safely receive them (background mode).
+     * Call this when the app returns to the foreground — typically in a Livewire component's
+     * mount() or a dedicated resume hook — to replay everything that was missed.
+     *
+     * Each item in the returned array has the shape:
+     *   ['event' => 'EventName', 'payload' => [...]]
+     *
+     * @return array[]
+     */
+    public function drainEvents(): array
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.drainEvents', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return $decoded['events'] ?? [];
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
      *
      * @param  string       $title    Track title

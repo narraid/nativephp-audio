@@ -57,10 +57,22 @@
             "description": "Get the current playback position in seconds"
         },
         {
+            "name": "Audio.getState",
+            "android": "com.narraid.audio.AudioFunctions.GetState",
+            "ios": "AudioFunctions.GetState",
+            "description": "Get the full current playback state (url, position, duration, isPlaying, metadata) from the native audio layer"
+        },
+        {
             "name": "Audio.setMetadata",
             "android": "com.narraid.audio.AudioFunctions.SetMetadata",
             "ios": "AudioFunctions.SetMetadata",
             "description": "Set track metadata (title, artist, album, artwork, duration) for lock screens, Bluetooth devices, and OS media centers"
+        },
+        {
+            "name": "Audio.drainEvents",
+            "android": "com.narraid.audio.AudioFunctions.DrainEvents",
+            "ios": "AudioFunctions.DrainEvents",
+            "description": "Return and clear all events queued while the app was in the background"
         }
     ],
 
