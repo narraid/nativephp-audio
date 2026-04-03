@@ -432,7 +432,11 @@ class AudioFunctions {
             val duration = (track["duration"] as? Number)?.toDouble()
             val clip     = track["clip"]    as? String
             @Suppress("UNCHECKED_CAST")
-            val metadata = track["metadata"] as? Map<String, Any>
+            val metadata = when (val raw = track["metadata"]) {
+                is Map<*, *> -> raw as Map<String, Any>
+                is JSONObject -> raw.keys().asSequence().associateWith { key -> raw.get(key) as Any }
+                else -> null
+            }
 
             currentUrl = url
             if (title != null) {
