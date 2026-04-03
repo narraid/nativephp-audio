@@ -349,6 +349,7 @@ class Audio
         ?string $album = null,
         ?string $artwork = null,
         ?float $duration = null,
+        ?array $metadata = null,
     ): bool {
         if (function_exists('nativephp_call')) {
             $params = array_filter([
@@ -357,6 +358,7 @@ class Audio
                 'album'    => $album,
                 'artwork'  => $artwork,
                 'duration' => $duration,
+                'metadata' => $metadata,
             ], fn ($v) => $v !== null);
 
             $result = nativephp_call('Audio.setMetadata', json_encode($params));

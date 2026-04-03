@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static float|null  getCurrentPosition()
  * @method static array|null  getState()
  * @method static array       drainEvents()
- * @method static bool        setMetadata(string $title, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null)
+ * @method static bool        setMetadata(string $title, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null, ?array $metadata = null)
  * @method static bool        setPlaylist(array $items, bool $autoPlay = true, int $startIndex = 0)
  * @method static bool        nextTrack()
  * @method static bool        previousTrack()
