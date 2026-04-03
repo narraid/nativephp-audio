@@ -887,6 +887,9 @@ class AudioFunctions {
             metaAlbum         = params.optString("album").takeIf { it.isNotEmpty() }
             metaDurationMs    = if (params.has("duration")) (params.optDouble("duration", 0.0) * 1000).toLong() else null
             metaArtworkSource = params.optString("artwork").takeIf { it.isNotEmpty() }
+            metaMetadata      = params.optJSONObject("metadata")?.let { obj ->
+                obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
+            }
 
             applySessionMetadata(context)
             if (mediaPlayer != null) {

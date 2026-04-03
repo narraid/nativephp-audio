@@ -810,6 +810,7 @@ enum AudioFunctions {
             AudioFunctions.metaAlbum         = parameters["album"]    as? String
             AudioFunctions.metaDuration      = (parameters["duration"] as? NSNumber)?.doubleValue
             AudioFunctions.metaArtworkSource = parameters["artwork"]  as? String
+            AudioFunctions.metaMetadata      = parameters["metadata"] as? [String: Any]
 
             DispatchQueue.main.async {
                 AudioFunctions.activateAudioSession()
