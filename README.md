@@ -633,3 +633,40 @@ events, and via withMeta()/metaPayload() for PlaybackBuffering, PlaybackReady, P
 The metadata flows through automatically: when a track is loaded (via play(), load(), or playlist auto-advance), metaMetadata is stored from the track's metadata field, and every
 subsequent event for that track carries it along.
 
+
+Here's exactly what to call for each scenario:
+
+  ---
+Scenario 1: Click a song to set the playlist and start from that track
+
+Use setPlaylist() with the startIndex pointing to the clicked track:
+
+JavaScript:
+await audioPlayer.setPlaylist(playlistItems, { autoPlay: true, startIndex: clickedIndex });
+
+PHP:
+Audio::setPlaylist($playlistItems, autoPlay: true, startIndex: $clickedIndex);
+
+Where playlistItems is the full array of tracks and clickedIndex is the 0-based position of the song they clicked.
+
+  ---
+Scenario 2: Click a different track in the same already-active playlist
+
+You have two options depending on your preference:
+
+Option A — Use setPlaylist() again (simpler, resets playlist state):
+await audioPlayer.setPlaylist(playlistItems, { autoPlay: true, startIndex: newClickedIndex });
+
+Option B — Jump directly to the track (if the native side supports direct index seek — but there's no skipToTrack(index) function in this API). You'd need to call nextTrack() / previousTrack() repeatedly, which isn't practical.
+
+Recommendation: use setPlaylist() for both scenarios. Detect whether the same playlist is already loaded, and if so, still call setPlaylist() with the new startIndex. It resets cleanly and is idempotent.
+
+  ---
+Practical click handler pattern
+
+function onTrackClick(playlistItems, clickedIndex) {
+audioPlayer.setPlaylist(playlistItems, { autoPlay: true, startIndex: clickedIndex });
+}
+
+Same function handles both cases — first click on a playlist or switching to a different track within it.
+
