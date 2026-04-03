@@ -25,6 +25,10 @@ use Illuminate\Support\Facades\Facade;
  * @method static array|null  getPlaylist()
  * @method static bool        setRepeatMode(string $mode)
  * @method static bool        setShuffleMode(bool $shuffle)
+ * @method static bool        setSleepTimer(float $minutes)
+ * @method static bool        cancelSleepTimer()
+ * @method static bool        appendTrack(array $track)
+ * @method static bool        removeTrack(int $index)
  *
  * @see \Narraid\Audio\Audio
  */

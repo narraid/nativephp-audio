@@ -71,6 +71,11 @@ class AudioFunctions {
         private var repeatMode: String = "none"
         private var shuffleMode: Boolean = false
         private val shuffledOrder: MutableList<Int> = mutableListOf()
+        private var isBuffering: Boolean = false
+
+        // ── Sleep Timer ───────────────────────────────────────────────────────
+        private var sleepTimerHandler: Handler? = null
+        private var sleepTimerRunnable: Runnable? = null
 
         // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -110,10 +115,11 @@ class AudioFunctions {
         }
 
         private fun statePayload(): Map<String, Any> = mapOf(
-            "position"  to positionSeconds(),
-            "duration"  to durationSeconds(),
-            "url"       to currentUrl,
-            "isPlaying" to (mediaPlayer?.isPlaying == true),
+            "position"    to positionSeconds(),
+            "duration"    to durationSeconds(),
+            "url"         to currentUrl,
+            "isPlaying"   to (mediaPlayer?.isPlaying == true),
+            "isBuffering" to isBuffering,
         )
 
         // ── Position / Duration ───────────────────────────────────────────────
@@ -382,6 +388,7 @@ class AudioFunctions {
             progressHandler = handler
             val runnable = object : Runnable {
                 override fun run() {
+                    if (progressRunnable !== this) return
                     if (mediaPlayer?.isPlaying == true) {
                         sendEvent("PlaybackProgressUpdated", statePayload())
                     }
@@ -401,7 +408,7 @@ class AudioFunctions {
         // ── Playlist Navigation ───────────────────────────────────────────────
 
         private fun effectiveTrackIndex(logicalIndex: Int): Int =
-            if (shuffledOrder.isNotEmpty()) shuffledOrder[logicalIndex] else logicalIndex
+            if (shuffledOrder.isNotEmpty()) shuffledOrder.getOrNull(logicalIndex) ?: logicalIndex else logicalIndex
 
         internal fun playTrackAt(index: Int) {
             if (index < 0 || index >= playlist.size) return
@@ -481,30 +488,7 @@ class AudioFunctions {
                             sendEvent("PlaybackStarted", startedPayload)
                         }
 
-                        setOnInfoListener { _, what, _ ->
-                            when (what) {
-                                MediaPlayer.MEDIA_INFO_BUFFERING_START ->
-                                    sendEvent("PlaybackBuffering", mapOf("url" to currentUrl, "position" to positionSeconds()))
-                                MediaPlayer.MEDIA_INFO_BUFFERING_END ->
-                                    sendEvent("PlaybackReady", mapOf("url" to currentUrl, "duration" to durationSeconds()))
-                            }
-                            false
-                        }
-
-                        setOnCompletionListener {
-                            stopProgressTimer()
-                            sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()))
-                            advancePlaylist()
-                        }
-
-                        setOnErrorListener { _, what, extra ->
-                            stopProgressTimer()
-                            sendEvent("PlaybackFailed", mapOf(
-                                "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
-                            ))
-                            false
-                        }
-
+                        attachCommonListeners(this)
                         prepareAsync()
                     }
                 } catch (e: Exception) {
@@ -531,7 +515,61 @@ class AudioFunctions {
 
         // ── Cleanup ───────────────────────────────────────────────────────────
 
+        private fun startSleepTimer(minutes: Double) {
+            cancelSleepTimer()
+            val handler = Handler(Looper.getMainLooper())
+            val runnable = Runnable {
+                if (mediaPlayer != null) {
+                    val payload = statePayload()
+                    releasePlayer()
+                    sendEvent("PlaybackStopped",   payload)
+                    sendEvent("SleepTimerExpired", emptyMap())
+                }
+            }
+            sleepTimerHandler  = handler
+            sleepTimerRunnable = runnable
+            handler.postDelayed(runnable, (minutes * 60 * 1000).toLong())
+        }
+
+        private fun cancelSleepTimer() {
+            sleepTimerRunnable?.let { sleepTimerHandler?.removeCallbacks(it) }
+            sleepTimerHandler  = null
+            sleepTimerRunnable = null
+        }
+
+        private fun attachCommonListeners(mp: MediaPlayer) {
+            mp.setOnInfoListener { _, what, _ ->
+                when (what) {
+                    MediaPlayer.MEDIA_INFO_BUFFERING_START -> {
+                        isBuffering = true
+                        sendEvent("PlaybackBuffering", mapOf("url" to currentUrl, "position" to positionSeconds()))
+                    }
+                    MediaPlayer.MEDIA_INFO_BUFFERING_END -> {
+                        isBuffering = false
+                        sendEvent("PlaybackReady", mapOf("url" to currentUrl, "duration" to durationSeconds()))
+                    }
+                }
+                false
+            }
+            mp.setOnCompletionListener {
+                isBuffering = false
+                stopProgressTimer()
+                sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()))
+                advancePlaylist()
+            }
+            mp.setOnErrorListener { _, what, extra ->
+                isBuffering = false
+                stopProgressTimer()
+                sendEvent("PlaybackFailed", mapOf(
+                    "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
+                ))
+                false
+            }
+        }
+
         private fun releasePlayer() {
+            isBuffering = false
+            cancelSleepTimer()
             stopProgressTimer()
             try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
             mediaPlayer?.release()
@@ -603,31 +641,7 @@ class AudioFunctions {
                             metadata?.let { payload["metadata"] = it }
                             sendEvent("PlaybackLoaded", payload)
                         }
-
-                        setOnInfoListener { _, what, _ ->
-                            when (what) {
-                                MediaPlayer.MEDIA_INFO_BUFFERING_START ->
-                                    sendEvent("PlaybackBuffering", mapOf("url" to currentUrl, "position" to positionSeconds()))
-                                MediaPlayer.MEDIA_INFO_BUFFERING_END ->
-                                    sendEvent("PlaybackReady", mapOf("url" to currentUrl, "duration" to durationSeconds()))
-                            }
-                            false
-                        }
-
-                        setOnCompletionListener {
-                            stopProgressTimer()
-                            sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()))
-                            advancePlaylist()
-                        }
-
-                        setOnErrorListener { _, what, extra ->
-                            stopProgressTimer()
-                            sendEvent("PlaybackFailed", mapOf(
-                                "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
-                            ))
-                            false
-                        }
-
+                        attachCommonListeners(this)
                         prepareAsync()
                     }
                 } catch (e: Exception) {
@@ -704,31 +718,7 @@ class AudioFunctions {
                             metadata?.let { payload["metadata"] = it }
                             sendEvent("PlaybackStarted", payload)
                         }
-
-                        setOnInfoListener { _, what, _ ->
-                            when (what) {
-                                MediaPlayer.MEDIA_INFO_BUFFERING_START ->
-                                    sendEvent("PlaybackBuffering", mapOf("url" to currentUrl, "position" to positionSeconds()))
-                                MediaPlayer.MEDIA_INFO_BUFFERING_END ->
-                                    sendEvent("PlaybackReady", mapOf("url" to currentUrl, "duration" to durationSeconds()))
-                            }
-                            false
-                        }
-
-                        setOnCompletionListener {
-                            stopProgressTimer()
-                            sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()))
-                            advancePlaylist()
-                        }
-
-                        setOnErrorListener { _, what, extra ->
-                            stopProgressTimer()
-                            sendEvent("PlaybackFailed", mapOf(
-                                "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
-                            ))
-                            false
-                        }
-
+                        attachCommonListeners(this)
                         prepareAsync()
                     }
                 } catch (e: Exception) {
@@ -780,6 +770,7 @@ class AudioFunctions {
             val from     = positionSeconds()
             val duration = durationSeconds()
             mediaPlayer?.seekTo((seconds * 1000).toInt())
+            updateSessionState()
             startProgressTimer(preferredProgressIntervalMs)
             sendEvent("PlaybackSeeked", mapOf(
                 "from" to from, "to" to seconds, "duration" to duration, "url" to currentUrl
@@ -836,6 +827,7 @@ class AudioFunctions {
                 "position"      to positionSeconds(),
                 "duration"      to durationSeconds(),
                 "isPlaying"     to (mediaPlayer?.isPlaying == true),
+                "isBuffering"   to isBuffering,
                 "hasPlayer"     to (mediaPlayer != null),
                 "playbackRate"  to playbackRate,
                 "hasPlaylist"   to playlist.isNotEmpty(),
@@ -980,6 +972,59 @@ class AudioFunctions {
             }
             sendEvent("PlaylistShuffleChanged", mapOf("shuffle" to shuffle))
             return mapOf("success" to true)
+        }
+    }
+
+    class SetSleepTimer(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val minutes = JSONObject(parameters).optDouble("minutes", 0.0)
+            if (minutes <= 0) return mapOf("success" to false, "error" to "minutes must be a positive number")
+            startSleepTimer(minutes)
+            return mapOf("success" to true, "minutes" to minutes)
+        }
+    }
+
+    class CancelSleepTimer(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            cancelSleepTimer()
+            return mapOf("success" to true)
+        }
+    }
+
+    class AppendTrack(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val params = JSONObject(parameters)
+            val trackJson = params.optJSONObject("track")
+                ?: return mapOf("success" to false, "error" to "track is required")
+            if (!trackJson.has("url")) return mapOf("success" to false, "error" to "track.url is required")
+            val track = mutableMapOf<String, Any>()
+            trackJson.keys().forEach { key -> track[key] = trackJson.get(key) }
+            playlist.add(track)
+            if (shuffleMode) shuffledOrder.add(playlist.size - 1)
+            return mapOf("success" to true, "total" to playlist.size)
+        }
+    }
+
+    class RemoveTrack(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val index = JSONObject(parameters).optInt("index", -1)
+            if (index < 0 || index >= playlist.size) {
+                return mapOf("success" to false, "error" to "index is out of range")
+            }
+            playlist.removeAt(index)
+            if (shuffleMode) {
+                shuffledOrder.removeAll { it == index }
+                val iter = shuffledOrder.listIterator()
+                while (iter.hasNext()) {
+                    val v = iter.next()
+                    if (v > index) iter.set(v - 1)
+                }
+            }
+            when {
+                playlistIndex > index  -> playlistIndex--
+                playlistIndex == index -> playlistIndex = -1
+            }
+            return mapOf("success" to true, "total" to playlist.size)
         }
     }
 }

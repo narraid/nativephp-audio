@@ -594,3 +594,32 @@ You can also pass arbitrary extra data via metadata:
 ]
 
 That metadata comes back in PlaylistTrackChanged so you can identify which track is playing in your Laravel listeners.
+
+PHP Event Classes (15 files fixed)
+- Added public bool $isPlaying to 13 statePayload-based events: PlaybackPaused, PlaybackResumed, PlaybackStopped, PlaybackProgressUpdated, RemotePlayReceived, RemotePauseReceived,
+  RemoteNextTrackReceived, RemotePreviousTrackReceived, RemoteStopReceived, AudioFocusLost, AudioFocusLostTransient, AudioFocusDucked, AudioFocusGained
+- Added ?array $metadata = null to PlaybackLoaded and PlaybackStarted
+- Created SleepTimerExpired.php event class
+
+Android (AudioFunctions.kt)
+- Fixed effectiveTrackIndex — now uses .getOrNull() to prevent IndexOutOfBoundsException on shuffle
+- Fixed progress timer race — added if (progressRunnable !== this) return guard
+- Added updateSessionState() to Seek.execute()
+- Extracted attachCommonListeners() — eliminated ~75 lines of duplicated listener setup from Load, Play, and playTrackAt
+- Added isBuffering state tracking (set in buffering/ready/completion/error/release handlers)
+- Added isBuffering to statePayload() and GetState
+- Added startSleepTimer() / cancelSleepTimer() (cancelled on releasePlayer())
+- Added bridge classes: SetSleepTimer, CancelSleepTimer, AppendTrack, RemoveTrack
+
+iOS (AudioFunctions.swift)
+- Added isBuffering state tracking (set in KVO observers, reset on resetPlayer() and track change)
+- Added isBuffering to statePayload() and GetState
+- Added sleepTimer: DispatchWorkItem? with startSleepTimer() / cancelSleepTimer() (cancelled on resetPlayer())
+- Added bridge classes: SetSleepTimer, CancelSleepTimer, AppendTrack, RemoveTrack
+
+API Surface (all layers updated)
+- src/Audio.php — added setSleepTimer, cancelSleepTimer, appendTrack, removeTrack
+- src/Facades/Audio.php — added @method entries for the 4 new methods
+- resources/js/audio.js — added 4 new JS methods
+- resources/views/bridge.blade.php — added SleepTimerExpired → audio-sleep-timer-expired DOM event
+- nativephp.json — registered 4 new bridge functions and SleepTimerExpired event

@@ -15,6 +15,7 @@ class PlaybackStarted
         public ?string $artist = null,
         public ?string $album = null,
         public ?float $duration = null,
+        public ?array $metadata = null,
     ) {
     }
 }

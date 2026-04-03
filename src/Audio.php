@@ -490,4 +490,85 @@ class Audio
 
         return false;
     }
+
+    /**
+     * Schedule playback to stop after a number of minutes.
+     * Fires PlaybackStopped and SleepTimerExpired when it triggers.
+     *
+     * @param  float  $minutes  Minutes until playback stops (must be > 0)
+     */
+    public function setSleepTimer(float $minutes): bool
+    {
+        $minutes = max(0.0, $minutes);
+
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.setSleepTimer', json_encode(['minutes' => $minutes]));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Cancel an active sleep timer before it fires.
+     */
+    public function cancelSleepTimer(): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.cancelSleepTimer', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Append a track to the end of the active playlist.
+     *
+     * @param  array  $track  Track object with at least a 'url' key
+     */
+    public function appendTrack(array $track): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.appendTrack', json_encode(['track' => $track]));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Remove a track from the active playlist by index.
+     *
+     * @param  int  $index  Zero-based index of the track to remove
+     */
+    public function removeTrack(int $index): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.removeTrack', json_encode(['index' => $index]));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
 }

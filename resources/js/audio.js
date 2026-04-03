@@ -97,6 +97,22 @@ const audioPlayer = {
     setShuffleMode: async (shuffle) => {
         return await window.nativephp.call('Audio.setShuffleMode', { shuffle });
     },
+
+    setSleepTimer: async (minutes) => {
+        return await window.nativephp.call('Audio.setSleepTimer', { minutes });
+    },
+
+    cancelSleepTimer: async () => {
+        return await window.nativephp.call('Audio.cancelSleepTimer');
+    },
+
+    appendTrack: async (track) => {
+        return await window.nativephp.call('Audio.appendTrack', { track });
+    },
+
+    removeTrack: async (index) => {
+        return await window.nativephp.call('Audio.removeTrack', { index });
+    },
 };
 
 export default audioPlayer;

@@ -121,6 +121,30 @@
             "android": "com.narraid.audio.AudioFunctions.SetShuffleMode",
             "ios": "AudioFunctions.SetShuffleMode",
             "description": "Enable or disable shuffle mode for the active playlist"
+        },
+        {
+            "name": "Audio.setSleepTimer",
+            "android": "com.narraid.audio.AudioFunctions.SetSleepTimer",
+            "ios": "AudioFunctions.SetSleepTimer",
+            "description": "Schedule playback to stop after the given number of minutes"
+        },
+        {
+            "name": "Audio.cancelSleepTimer",
+            "android": "com.narraid.audio.AudioFunctions.CancelSleepTimer",
+            "ios": "AudioFunctions.CancelSleepTimer",
+            "description": "Cancel an active sleep timer before it fires"
+        },
+        {
+            "name": "Audio.appendTrack",
+            "android": "com.narraid.audio.AudioFunctions.AppendTrack",
+            "ios": "AudioFunctions.AppendTrack",
+            "description": "Append a track to the end of the active playlist"
+        },
+        {
+            "name": "Audio.removeTrack",
+            "android": "com.narraid.audio.AudioFunctions.RemoveTrack",
+            "ios": "AudioFunctions.RemoveTrack",
+            "description": "Remove a track from the active playlist by zero-based index"
         }
     ],
 
@@ -190,7 +214,8 @@
         "Narraid\\Audio\\Events\\PlaylistTrackChanged",
         "Narraid\\Audio\\Events\\PlaylistEnded",
         "Narraid\\Audio\\Events\\PlaylistRepeatModeChanged",
-        "Narraid\\Audio\\Events\\PlaylistShuffleChanged"
+        "Narraid\\Audio\\Events\\PlaylistShuffleChanged",
+        "Narraid\\Audio\\Events\\SleepTimerExpired"
     ],
 
     "hooks": {}

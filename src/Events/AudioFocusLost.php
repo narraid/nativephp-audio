@@ -13,6 +13,7 @@ class AudioFocusLost
         public string $url,
         public float $position,
         public float $duration,
+        public bool $isPlaying,
     ) {
     }
 }

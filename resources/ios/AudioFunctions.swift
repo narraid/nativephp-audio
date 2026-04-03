@@ -35,6 +35,7 @@ enum AudioFunctions {
     private static var remoteCommandsRegistered = false
     private static var backgroundObserversRegistered = false
     private static var pausedByFocusLoss = false
+    private static var isBuffering = false
 
     // MARK: - Playlist State
 
@@ -48,6 +49,10 @@ enum AudioFunctions {
 
     private static var playbackRate: Float = 1.0
     private static var progressInterval: Double = 10.0
+
+    // MARK: - Sleep Timer
+
+    private static var sleepTimer: DispatchWorkItem?
 
     // MARK: - Background Event Queue
 
@@ -68,10 +73,11 @@ enum AudioFunctions {
 
     private static func statePayload() -> [String: Any] {
         [
-            "position":  positionSeconds(),
-            "duration":  durationSeconds(),
-            "url":       currentURL,
-            "isPlaying": player?.rate ?? 0 > 0,
+            "position":    positionSeconds(),
+            "duration":    durationSeconds(),
+            "url":         currentURL,
+            "isPlaying":   player?.rate ?? 0 > 0,
+            "isBuffering": isBuffering,
         ]
     }
 
@@ -202,6 +208,8 @@ enum AudioFunctions {
     }
 
     private static func resetPlayer() {
+        isBuffering = false
+        cancelSleepTimer()
         stopProgressTimer()
         player?.pause()
         player     = nil
@@ -294,6 +302,26 @@ enum AudioFunctions {
             progressObserver = nil
             progressObserverPlayer = nil
         }
+    }
+
+    // MARK: - Sleep Timer
+
+    private static func startSleepTimer(seconds: Double) {
+        sleepTimer?.cancel()
+        let item = DispatchWorkItem {
+            guard AudioFunctions.player != nil else { return }
+            let payload = AudioFunctions.statePayload()
+            AudioFunctions.resetPlayer()
+            AudioFunctions.sendEvent("PlaybackStopped",    payload)
+            AudioFunctions.sendEvent("SleepTimerExpired",  [:])
+        }
+        sleepTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
+    }
+
+    private static func cancelSleepTimer() {
+        sleepTimer?.cancel()
+        sleepTimer = nil
     }
 
     // MARK: - Remote Command Centre
@@ -483,6 +511,7 @@ enum AudioFunctions {
         bufferingObservation = nil
         readyObservation?.invalidate()
         readyObservation     = nil
+        isBuffering          = false
 
         activateAudioSession()
         setupRemoteCommands()
@@ -509,6 +538,7 @@ enum AudioFunctions {
         // PlaybackReady when there is enough data to play without interruption.
         bufferingObservation = playerItem?.observe(\.isPlaybackBufferEmpty, options: [.new]) { item, _ in
             guard item.isPlaybackBufferEmpty else { return }
+            AudioFunctions.isBuffering = true
             AudioFunctions.sendEvent("PlaybackBuffering", [
                 "url": urlString, "position": AudioFunctions.positionSeconds()
             ])
@@ -516,6 +546,7 @@ enum AudioFunctions {
 
         readyObservation = playerItem?.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { item, _ in
             guard item.isPlaybackLikelyToKeepUp else { return }
+            AudioFunctions.isBuffering = false
             AudioFunctions.sendEvent("PlaybackReady", [
                 "url": urlString, "duration": AudioFunctions.durationSeconds()
             ])
@@ -714,6 +745,7 @@ enum AudioFunctions {
                 "position":      AudioFunctions.positionSeconds(),
                 "duration":      AudioFunctions.durationSeconds(),
                 "isPlaying":     AudioFunctions.player?.rate ?? 0 > 0,
+                "isBuffering":   AudioFunctions.isBuffering,
                 "hasPlayer":     AudioFunctions.player != nil,
                 "playbackRate":  AudioFunctions.playbackRate,
                 "hasPlaylist":   !AudioFunctions.playlist.isEmpty,
@@ -857,6 +889,60 @@ enum AudioFunctions {
             }
             AudioFunctions.sendEvent("PlaylistShuffleChanged", ["shuffle": shuffle])
             return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class SetSleepTimer: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let minutes = (parameters["minutes"] as? NSNumber)?.doubleValue, minutes > 0 else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "minutes must be a positive number.")
+            }
+            AudioFunctions.startSleepTimer(seconds: minutes * 60)
+            return BridgeResponse.success(data: ["success": true, "minutes": minutes])
+        }
+    }
+
+    class CancelSleepTimer: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            AudioFunctions.cancelSleepTimer()
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class AppendTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let track = parameters["track"] as? [String: Any],
+                  track["url"] as? String != nil else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "track with url is required.")
+            }
+            AudioFunctions.playlist.append(track)
+            if AudioFunctions.shuffleMode {
+                AudioFunctions.shuffledOrder.append(AudioFunctions.playlist.count - 1)
+            }
+            return BridgeResponse.success(data: ["success": true, "total": AudioFunctions.playlist.count])
+        }
+    }
+
+    class RemoveTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let index = (parameters["index"] as? NSNumber)?.intValue,
+                  index >= 0, index < AudioFunctions.playlist.count else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "index is out of range.")
+            }
+            AudioFunctions.playlist.remove(at: index)
+            // Rebuild shuffled order removing any reference to removed index and shifting higher indices down.
+            if AudioFunctions.shuffleMode {
+                AudioFunctions.shuffledOrder = AudioFunctions.shuffledOrder
+                    .filter { $0 != index }
+                    .map { $0 > index ? $0 - 1 : $0 }
+            }
+            // Adjust playlistIndex if needed.
+            if AudioFunctions.playlistIndex > index {
+                AudioFunctions.playlistIndex -= 1
+            } else if AudioFunctions.playlistIndex == index {
+                AudioFunctions.playlistIndex = -1
+            }
+            return BridgeResponse.success(data: ["success": true, "total": AudioFunctions.playlist.count])
         }
     }
 }
