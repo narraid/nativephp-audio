@@ -30,8 +30,6 @@
             'Narraid\\Audio\\Events\\PlaylistRepeatModeChanged': 'audio-playlist-repeat-changed',
             'Narraid\\Audio\\Events\\PlaylistShuffleChanged':    'audio-playlist-shuffle-changed',
             'Narraid\\Audio\\Events\\SleepTimerExpired':         'audio-sleep-timer-expired',
-            'Narraid\\Audio\\Events\\PlayerBackgrounded':        'player-backgrounded',
-            'Narraid\\Audio\\Events\\PlayerForegrounded':        'player-foregrounded',
         };
 
         const domEvent = map[name];
