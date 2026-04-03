@@ -623,3 +623,13 @@ API Surface (all layers updated)
 - resources/js/audio.js — added 4 new JS methods
 - resources/views/bridge.blade.php — added SleepTimerExpired → audio-sleep-timer-expired DOM event
 - nativephp.json — registered 4 new bridge functions and SleepTimerExpired event
+  Now verify everything looks correct:
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+⏺ All 21 url-bearing event classes now carry ?array $metadata = null. On both platforms, metaMetadata is included in every event payload — via statePayload() for the 13 state-based
+events, and via withMeta()/metaPayload() for PlaybackBuffering, PlaybackReady, PlaybackCompleted, PlaybackFailed, PlaybackSeeked, and RemoteSeekReceived.
+
+The metadata flows through automatically: when a track is loaded (via play(), load(), or playlist auto-advance), metaMetadata is stored from the track's metadata field, and every
+subsequent event for that track carries it along.
+

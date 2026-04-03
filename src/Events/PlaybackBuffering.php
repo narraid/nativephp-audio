@@ -12,6 +12,7 @@ class PlaybackBuffering
     public function __construct(
         public string $url,
         public float $position,
+        public ?array $metadata = null,
     ) {
     }
 }

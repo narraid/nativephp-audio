@@ -14,6 +14,7 @@ class AudioFocusLostTransient
         public float $position,
         public float $duration,
         public bool $isPlaying,
+        public ?array $metadata = null,
     ) {
     }
 }

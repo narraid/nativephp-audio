@@ -114,13 +114,17 @@ class AudioFunctions {
             }
         }
 
-        private fun statePayload(): Map<String, Any> = mapOf(
-            "position"    to positionSeconds(),
-            "duration"    to durationSeconds(),
-            "url"         to currentUrl,
-            "isPlaying"   to (mediaPlayer?.isPlaying == true),
-            "isBuffering" to isBuffering,
-        )
+        private fun statePayload(): Map<String, Any> {
+            val m = mutableMapOf<String, Any>(
+                "position"    to positionSeconds(),
+                "duration"    to durationSeconds(),
+                "url"         to currentUrl,
+                "isPlaying"   to (mediaPlayer?.isPlaying == true),
+                "isBuffering" to isBuffering,
+            )
+            metaMetadata?.let { m["metadata"] = it }
+            return m
+        }
 
         // ── Position / Duration ───────────────────────────────────────────────
 
@@ -227,7 +231,7 @@ class AudioFunctions {
                         sendEvent("RemoteSeekReceived", mapOf(
                             "position" to from, "duration" to durationSeconds(),
                             "url" to currentUrl, "seekTo" to pos / 1000.0
-                        ))
+                        ) + metaPayload())
                     }
 
                     override fun onStop() {
@@ -492,7 +496,7 @@ class AudioFunctions {
                         prepareAsync()
                     }
                 } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")))
+                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")) + metaPayload())
                 }
             }
         }
@@ -537,16 +541,19 @@ class AudioFunctions {
             sleepTimerRunnable = null
         }
 
+        private fun metaPayload(): Map<String, Any> =
+            metaMetadata?.let { mapOf("metadata" to it) } ?: emptyMap()
+
         private fun attachCommonListeners(mp: MediaPlayer) {
             mp.setOnInfoListener { _, what, _ ->
                 when (what) {
                     MediaPlayer.MEDIA_INFO_BUFFERING_START -> {
                         isBuffering = true
-                        sendEvent("PlaybackBuffering", mapOf("url" to currentUrl, "position" to positionSeconds()))
+                        sendEvent("PlaybackBuffering", mapOf("url" to currentUrl, "position" to positionSeconds()) + metaPayload())
                     }
                     MediaPlayer.MEDIA_INFO_BUFFERING_END -> {
                         isBuffering = false
-                        sendEvent("PlaybackReady", mapOf("url" to currentUrl, "duration" to durationSeconds()))
+                        sendEvent("PlaybackReady", mapOf("url" to currentUrl, "duration" to durationSeconds()) + metaPayload())
                     }
                 }
                 false
@@ -554,7 +561,7 @@ class AudioFunctions {
             mp.setOnCompletionListener {
                 isBuffering = false
                 stopProgressTimer()
-                sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()))
+                sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()) + metaPayload())
                 advancePlaylist()
             }
             mp.setOnErrorListener { _, what, extra ->
@@ -562,7 +569,7 @@ class AudioFunctions {
                 stopProgressTimer()
                 sendEvent("PlaybackFailed", mapOf(
                     "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
-                ))
+                ) + metaPayload())
                 false
             }
         }
@@ -645,7 +652,7 @@ class AudioFunctions {
                         prepareAsync()
                     }
                 } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")))
+                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")) + metaPayload())
                 }
             }
 
@@ -722,7 +729,7 @@ class AudioFunctions {
                         prepareAsync()
                     }
                 } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")))
+                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")) + metaPayload())
                 }
             }
 
@@ -774,7 +781,7 @@ class AudioFunctions {
             startProgressTimer(preferredProgressIntervalMs)
             sendEvent("PlaybackSeeked", mapOf(
                 "from" to from, "to" to seconds, "duration" to duration, "url" to currentUrl
-            ))
+            ) + metaPayload())
             return mapOf("success" to true)
         }
     }

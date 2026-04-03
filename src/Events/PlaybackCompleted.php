@@ -12,6 +12,7 @@ class PlaybackCompleted
     public function __construct(
         public string $url,
         public float $duration,
+        public ?array $metadata = null,
     ) {
     }
 }

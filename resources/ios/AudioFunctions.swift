@@ -71,14 +71,23 @@ enum AudioFunctions {
         LaravelBridge.shared.send?(eventPrefix + name, payload)
     }
 
+    private static func withMeta(_ base: [String: Any]) -> [String: Any] {
+        guard let m = metaMetadata else { return base }
+        var copy = base
+        copy["metadata"] = m
+        return copy
+    }
+
     private static func statePayload() -> [String: Any] {
-        [
+        var p: [String: Any] = [
             "position":    positionSeconds(),
             "duration":    durationSeconds(),
             "url":         currentURL,
             "isPlaying":   player?.rate ?? 0 > 0,
             "isBuffering": isBuffering,
         ]
+        if let m = metaMetadata { p["metadata"] = m }
+        return p
     }
 
     // MARK: - Position / Duration
@@ -410,9 +419,9 @@ enum AudioFunctions {
             let duration = durationSeconds()
             player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) { _ in
                 syncNowPlayingState()
-                sendEvent("RemoteSeekReceived", [
+                sendEvent("RemoteSeekReceived", withMeta([
                     "position": from, "duration": duration, "url": currentURL, "seekTo": seekTo
-                ])
+                ]))
             }
             return .success
         }
@@ -539,17 +548,17 @@ enum AudioFunctions {
         bufferingObservation = playerItem?.observe(\.isPlaybackBufferEmpty, options: [.new]) { item, _ in
             guard item.isPlaybackBufferEmpty else { return }
             AudioFunctions.isBuffering = true
-            AudioFunctions.sendEvent("PlaybackBuffering", [
+            AudioFunctions.sendEvent("PlaybackBuffering", AudioFunctions.withMeta([
                 "url": urlString, "position": AudioFunctions.positionSeconds()
-            ])
+            ]))
         }
 
         readyObservation = playerItem?.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { item, _ in
             guard item.isPlaybackLikelyToKeepUp else { return }
             AudioFunctions.isBuffering = false
-            AudioFunctions.sendEvent("PlaybackReady", [
+            AudioFunctions.sendEvent("PlaybackReady", AudioFunctions.withMeta([
                 "url": urlString, "duration": AudioFunctions.durationSeconds()
-            ])
+            ]))
         }
 
         completionObserver = NotificationCenter.default.addObserver(
@@ -557,7 +566,7 @@ enum AudioFunctions {
             object: playerItem, queue: .main
         ) { _ in
             stopProgressTimer()
-            sendEvent("PlaybackCompleted", ["url": urlString, "duration": durationSeconds()])
+            sendEvent("PlaybackCompleted", withMeta(["url": urlString, "duration": durationSeconds()]))
             advancePlaylist()
         }
 
@@ -568,7 +577,7 @@ enum AudioFunctions {
             stopProgressTimer()
             let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
                 .localizedDescription ?? "Unknown error"
-            sendEvent("PlaybackFailed", ["url": urlString, "error": error])
+            sendEvent("PlaybackFailed", withMeta(["url": urlString, "error": error]))
         }
     }
 
@@ -683,9 +692,9 @@ enum AudioFunctions {
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
                 AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
                 AudioFunctions.syncNowPlayingState()
-                AudioFunctions.sendEvent("PlaybackSeeked", [
+                AudioFunctions.sendEvent("PlaybackSeeked", AudioFunctions.withMeta([
                     "from": from, "to": seconds, "duration": duration, "url": AudioFunctions.currentURL
-                ])
+                ]))
             }
             return BridgeResponse.success(data: ["success": true])
         }

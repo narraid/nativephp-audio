@@ -12,6 +12,7 @@ class PlaybackFailed
     public function __construct(
         public string $url,
         public string $error,
+        public ?array $metadata = null,
     ) {
     }
 }
