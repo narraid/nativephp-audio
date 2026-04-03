@@ -87,9 +87,13 @@ class AudioFunctions {
                 if (mediaPlayer?.isPlaying == true) {
                     startProgressTimer(preferredProgressIntervalMs)
                 }
+
+                sendEvent("PlayerForegrounded")
             }
             NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_PAUSE) { _ ->
                 isInBackground = true
+
+                sendEvent("PlayerBackgrounded")
                 // Progress timer intentionally kept running in background so the service
                 // notification stays current. Events are queued, not dispatched.
             }

@@ -125,12 +125,18 @@ enum AudioFunctions {
         NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
             object: nil, queue: .main
-        ) { _ in isInBackground = true }
+        ) { _ in
+            isInBackground = true
+            sendEvent("PlayerBackgrounded")
+        }
 
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil, queue: .main
-        ) { _ in isInBackground = false }
+        ) { _ in
+            isInBackground = false
+            sendEvent("PlayerForegrounded")
+        }
     }
 
     // MARK: - Audio Session
