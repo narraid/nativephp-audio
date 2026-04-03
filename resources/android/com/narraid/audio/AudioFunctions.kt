@@ -88,12 +88,12 @@ class AudioFunctions {
                     startProgressTimer(preferredProgressIntervalMs)
                 }
 
-                sendEvent("PlayerForegrounded")
+                sendEvent("PlayerForegrounded", emptyMap())
             }
             NativePHPLifecycle.on(NativePHPLifecycle.Events.ON_PAUSE) { _ ->
                 isInBackground = true
 
-                sendEvent("PlayerBackgrounded")
+                sendEvent("PlayerBackgrounded", emptyMap())
                 // Progress timer intentionally kept running in background so the service
                 // notification stays current. Events are queued, not dispatched.
             }

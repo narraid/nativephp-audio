@@ -127,7 +127,7 @@ enum AudioFunctions {
             object: nil, queue: .main
         ) { _ in
             isInBackground = true
-            sendEvent("PlayerBackgrounded")
+            sendEvent("PlayerBackgrounded",  [:])
         }
 
         NotificationCenter.default.addObserver(
@@ -135,7 +135,7 @@ enum AudioFunctions {
             object: nil, queue: .main
         ) { _ in
             isInBackground = false
-            sendEvent("PlayerForegrounded")
+            sendEvent("PlayerForegrounded",  [:])
         }
     }
 
