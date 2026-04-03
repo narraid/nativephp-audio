@@ -286,7 +286,7 @@ class Audio
      * Get the full current playback state from the native audio layer.
      *
      * Returns an associative array with keys:
-     *   url, position, duration, isPlaying, hasPlayer, playbackRate,
+     *   url, position, duration, isPlaying, isBuffering, hasPlayer, playbackRate,
      *   hasPlaylist, playlistIndex, playlistTotal, repeatMode, shuffleMode,
      *   title, artist, album, artwork, metadata
      *

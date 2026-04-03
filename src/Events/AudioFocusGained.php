@@ -13,6 +13,7 @@ class AudioFocusGained
         public string $url,
         public float $position,
         public float $duration,
+        public bool $isBuffering,
         public bool $isPlaying,
         public ?array $metadata = null,
     ) {
