@@ -17,6 +17,7 @@ enum AudioFunctions {
     private static var metaAlbum: String?
     private static var metaDuration: Double?
     private static var metaArtworkSource: String?
+    private static var metaClip: String?
     private static var metaMetadata: [String: Any]?
 
     // MARK: - Observers
@@ -249,10 +250,11 @@ enum AudioFunctions {
         let album    = track["album"]    as? String
         let artwork  = track["artwork"]  as? String
         let duration = (track["duration"] as? NSNumber)?.doubleValue
+        let clip     = track["clip"]     as? String
         let metadata = track["metadata"] as? [String: Any]
 
         preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
-                      album: album, artwork: artwork, duration: duration, metadata: metadata)
+                      album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
         player?.play()
         if playbackRate != 1.0 { player?.rate = playbackRate }
         syncNowPlayingState()
@@ -263,6 +265,8 @@ enum AudioFunctions {
         if let a = artist   { trackChangedPayload["artist"]   = a }
         if let a = album    { trackChangedPayload["album"]    = a }
         if let d = duration { trackChangedPayload["duration"] = d }
+        if let w = artwork  { trackChangedPayload["artwork"]  = w }
+        if let c = clip     { trackChangedPayload["clip"]     = c }
         if let m = metadata { trackChangedPayload["metadata"] = m }
         sendEvent("PlaylistTrackChanged", trackChangedPayload)
 
@@ -271,6 +275,8 @@ enum AudioFunctions {
         if let a = artist   { startedPayload["artist"]   = a }
         if let a = album    { startedPayload["album"]    = a }
         if let d = duration { startedPayload["duration"] = d }
+        if let w = artwork  { startedPayload["artwork"]  = w }
+        if let c = clip     { startedPayload["clip"]     = c }
         if let m = metadata { startedPayload["metadata"] = m }
         sendEvent("PlaybackStarted", startedPayload)
     }
@@ -508,7 +514,7 @@ enum AudioFunctions {
      * but does NOT start playback. Callers must call player?.play() themselves.
      */
     private static func preparePlayer(urlString: String, url: URL, title: String?, artist: String?,
-                                      album: String?, artwork: String?, duration: Double?, metadata: [String: Any]?) {
+                                      album: String?, artwork: String?, duration: Double?, clip: String?, metadata: [String: Any]?) {
         // Stop timer BEFORE replacing the player — removeTimeObserver must be called on the
         // same AVPlayer instance that added it.
         stopProgressTimer()
@@ -535,6 +541,7 @@ enum AudioFunctions {
             metaAlbum         = album
             metaDuration      = duration
             metaArtworkSource = artwork
+            metaClip          = clip
             metaMetadata      = metadata
         }
 
@@ -598,10 +605,11 @@ enum AudioFunctions {
             let album    = parameters["album"]    as? String
             let artwork  = parameters["artwork"]  as? String
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
+            let clip     = parameters["clip"]     as? String
             let metadata = parameters["metadata"] as? [String: Any]
 
             AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
-                                         album: album, artwork: artwork, duration: duration, metadata: metadata)
+                                         album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
             AudioFunctions.syncNowPlayingState()
 
             var loadedPayload: [String: Any] = ["url": urlString]
@@ -609,6 +617,8 @@ enum AudioFunctions {
             if let a = artist   { loadedPayload["artist"]   = a }
             if let a = album    { loadedPayload["album"]    = a }
             if let d = duration { loadedPayload["duration"] = d }
+            if let w = artwork  { loadedPayload["artwork"]  = w }
+            if let c = clip     { loadedPayload["clip"]     = c }
             if let m = metadata { loadedPayload["metadata"] = m }
             AudioFunctions.sendEvent("PlaybackLoaded", loadedPayload)
 
@@ -631,10 +641,11 @@ enum AudioFunctions {
             let album    = parameters["album"]    as? String
             let artwork  = parameters["artwork"]  as? String
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
+            let clip     = parameters["clip"]     as? String
             let metadata = parameters["metadata"] as? [String: Any]
 
             AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
-                                         album: album, artwork: artwork, duration: duration, metadata: metadata)
+                                         album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
 
             AudioFunctions.player?.play()
             if AudioFunctions.playbackRate != 1.0 { AudioFunctions.player?.rate = AudioFunctions.playbackRate }
@@ -646,6 +657,8 @@ enum AudioFunctions {
             if let a = artist   { startedPayload["artist"]   = a }
             if let a = album    { startedPayload["album"]    = a }
             if let d = duration { startedPayload["duration"] = d }
+            if let w = artwork  { startedPayload["artwork"]  = w }
+            if let c = clip     { startedPayload["clip"]     = c }
             if let m = metadata { startedPayload["metadata"] = m }
             AudioFunctions.sendEvent("PlaybackStarted", startedPayload)
 

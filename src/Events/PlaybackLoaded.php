@@ -15,6 +15,8 @@ class PlaybackLoaded
         public ?string $artist = null,
         public ?string $album = null,
         public ?float $duration = null,
+        public ?string $artwork = null,
+        public ?string $clip = null,
         public ?array $metadata = null,
     ) {
     }

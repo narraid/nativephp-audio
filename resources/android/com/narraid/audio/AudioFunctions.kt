@@ -42,6 +42,7 @@ class AudioFunctions {
         private var metaAlbum: String? = null
         private var metaDurationMs: Long? = null
         private var metaArtworkSource: String? = null
+        private var metaClip: String? = null
         internal var currentArtwork: Bitmap? = null
         private var metaMetadata: Map<String, Any>? = null
 
@@ -429,6 +430,7 @@ class AudioFunctions {
             val album    = track["album"]   as? String
             val artwork  = track["artwork"] as? String
             val duration = (track["duration"] as? Number)?.toDouble()
+            val clip     = track["clip"]    as? String
             @Suppress("UNCHECKED_CAST")
             val metadata = track["metadata"] as? Map<String, Any>
 
@@ -439,6 +441,7 @@ class AudioFunctions {
                 metaAlbum         = album
                 metaDurationMs    = duration?.let { (it * 1000).toLong() }
                 metaArtworkSource = artwork
+                metaClip          = clip
                 metaMetadata      = metadata
             }
 
@@ -480,6 +483,8 @@ class AudioFunctions {
                             artist?.let   { trackChangedPayload["artist"]   = it }
                             album?.let    { trackChangedPayload["album"]    = it }
                             duration?.let { trackChangedPayload["duration"] = it }
+                            artwork?.let  { trackChangedPayload["artwork"]  = it }
+                            clip?.let     { trackChangedPayload["clip"]     = it }
                             metadata?.let { trackChangedPayload["metadata"] = it }
                             sendEvent("PlaylistTrackChanged", trackChangedPayload)
 
@@ -488,6 +493,8 @@ class AudioFunctions {
                             artist?.let   { startedPayload["artist"]   = it }
                             album?.let    { startedPayload["album"]    = it }
                             duration?.let { startedPayload["duration"] = it }
+                            artwork?.let  { startedPayload["artwork"]  = it }
+                            clip?.let     { startedPayload["clip"]     = it }
                             metadata?.let { startedPayload["metadata"] = it }
                             sendEvent("PlaybackStarted", startedPayload)
                         }
@@ -605,6 +612,7 @@ class AudioFunctions {
             val album    = params.optString("album").takeIf { it.isNotEmpty() }
             val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
             val duration = if (params.has("duration")) params.optDouble("duration") else null
+            val clip     = params.optString("clip").takeIf { it.isNotEmpty() }
             val metadata = params.optJSONObject("metadata")?.let { obj ->
                 obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
             }
@@ -617,6 +625,7 @@ class AudioFunctions {
                 metaAlbum         = album
                 metaDurationMs    = duration?.let { (it * 1000).toLong() }
                 metaArtworkSource = artwork
+                metaClip          = clip
                 metaMetadata      = metadata
             }
 
@@ -645,6 +654,8 @@ class AudioFunctions {
                             artist?.let   { payload["artist"]   = it }
                             album?.let    { payload["album"]    = it }
                             duration?.let { payload["duration"] = it }
+                            artwork?.let  { payload["artwork"]  = it }
+                            clip?.let     { payload["clip"]     = it }
                             metadata?.let { payload["metadata"] = it }
                             sendEvent("PlaybackLoaded", payload)
                         }
@@ -675,6 +686,7 @@ class AudioFunctions {
             val album    = params.optString("album").takeIf { it.isNotEmpty() }
             val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
             val duration = if (params.has("duration")) params.optDouble("duration") else null
+            val clip     = params.optString("clip").takeIf { it.isNotEmpty() }
             val metadata = params.optJSONObject("metadata")?.let { obj ->
                 obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
             }
@@ -687,6 +699,7 @@ class AudioFunctions {
                 metaAlbum         = album
                 metaDurationMs    = duration?.let { (it * 1000).toLong() }
                 metaArtworkSource = artwork
+                metaClip          = clip
                 metaMetadata      = metadata
             }
 
@@ -722,6 +735,8 @@ class AudioFunctions {
                             artist?.let   { payload["artist"]   = it }
                             album?.let    { payload["album"]    = it }
                             duration?.let { payload["duration"] = it }
+                            artwork?.let  { payload["artwork"]  = it }
+                            clip?.let     { payload["clip"]     = it }
                             metadata?.let { payload["metadata"] = it }
                             sendEvent("PlaybackStarted", payload)
                         }

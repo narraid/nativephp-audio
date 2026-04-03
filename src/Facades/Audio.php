@@ -5,8 +5,8 @@ namespace Narraid\Audio\Facades;
 use Illuminate\Support\Facades\Facade;
 
 /**
- * @method static bool        load(string $url, ?string $title = null, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null, ?array $metadata = null)
- * @method static bool        play(string $url, ?string $title = null, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null, ?array $metadata = null)
+ * @method static bool        load(string $url, ?string $title = null, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null, ?string $clip = null, ?array $metadata = null)
+ * @method static bool        play(string $url, ?string $title = null, ?string $artist = null, ?string $album = null, ?string $artwork = null, ?float $duration = null, ?string $clip = null, ?array $metadata = null)
  * @method static bool        pause()
  * @method static bool        resume()
  * @method static bool        stop()

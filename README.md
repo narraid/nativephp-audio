@@ -670,3 +670,23 @@ audioPlayer.setPlaylist(playlistItems, { autoPlay: true, startIndex: clickedInde
 
 Same function handles both cases — first click on a playlist or switching to a different track within it.
 
+ll changes are done. Here's a summary of what was missing and what was fixed:
+
+Both files were missing:
+- clip field — not parsed from params, not stored, not in event payloads
+- artwork — was parsed and stored, but not included in event payloads (PlaybackLoaded, PlaybackStarted, PlaylistTrackChanged)
+
+Changes made to AudioFunctions.kt (Kotlin):
+- Added private var metaClip: String? = null
+- Load class: reads clip, stores metaClip, adds artwork/clip to PlaybackLoaded payload
+- Play class: reads clip, stores metaClip, adds artwork/clip to PlaybackStarted payload
+- playTrackAt: reads clip from track, stores metaClip, adds artwork/clip to both PlaylistTrackChanged and PlaybackStarted payloads
+
+Changes made to AudioFunctions.swift (Swift):
+- Added private static var metaClip: String?
+- preparePlayer: added clip parameter, stores metaClip
+- Load class: reads clip, passes to preparePlayer, adds artwork/clip to PlaybackLoaded payload
+- Play class: reads clip, passes to preparePlayer, adds artwork/clip to PlaybackStarted payload
+- playTrackAt: reads clip from track, passes to preparePlayer, adds artwork/clip to both PlaylistTrackChanged and PlaybackStarted payloads                                                                                                  
+                                                                                                                                                              
+

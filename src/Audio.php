@@ -16,6 +16,7 @@ class Audio
      * @param  string|null  $album    Album name
      * @param  string|null  $artwork  URL or local path to artwork image
      * @param  float|null   $duration Total track duration in seconds
+     * @param  string|null  $clip     URL or local path to a short audio preview/clip
      * @param  array|null   $metadata Arbitrary key/value pairs passed through to native events
      */
     public function load(
@@ -25,6 +26,7 @@ class Audio
         ?string $album = null,
         ?string $artwork = null,
         ?float $duration = null,
+        ?string $clip = null,
         ?array $metadata = null,
     ): bool {
         if (function_exists('nativephp_call')) {
@@ -35,6 +37,7 @@ class Audio
                 'album'    => $album,
                 'artwork'  => $artwork,
                 'duration' => $duration,
+                'clip'     => $clip,
                 'metadata' => $metadata,
             ], fn ($v) => $v !== null);
 
@@ -62,6 +65,7 @@ class Audio
      * @param  string|null  $album    Album name
      * @param  string|null  $artwork  URL or local path to artwork image
      * @param  float|null   $duration Total track duration in seconds
+     * @param  string|null  $clip     URL or local path to a short audio preview/clip
      * @param  array|null   $metadata Arbitrary key/value pairs passed through to native events
      */
     public function play(
@@ -71,6 +75,7 @@ class Audio
         ?string $album = null,
         ?string $artwork = null,
         ?float $duration = null,
+        ?string $clip = null,
         ?array $metadata = null,
     ): bool {
         if (function_exists('nativephp_call')) {
@@ -81,6 +86,7 @@ class Audio
                 'album'    => $album,
                 'artwork'  => $artwork,
                 'duration' => $duration,
+                'clip'     => $clip,
                 'metadata' => $metadata,
             ], fn ($v) => $v !== null);
 
@@ -369,7 +375,7 @@ class Audio
      * Set the playlist queue natively so tracks auto-advance in the background on both iOS and Android.
      *
      * Each item in $items must have a 'url' key. Optional keys per item:
-     *   title, artist, album, artwork, duration, metadata
+     *   title, artist, album, artwork, duration, clip, metadata
      *
      * @param  array  $items       Array of track objects
      * @param  bool   $autoPlay    Start playing immediately (default true)
