@@ -7,7 +7,8 @@ class Audio
     /**
      * Load an audio file without starting playback.
      * The audio is prepared and ready to play via resume().
-     * Fires a PlaybackLoaded event once the audio is ready.
+     * Fires PlaybackLoaded once ready, PlaybackBuffering while fetching,
+     * and PlaybackReady when enough data is buffered.
      *
      * @param  string       $url      URL or local path of the audio file
      * @param  string|null  $title    Track title
@@ -40,9 +41,9 @@ class Audio
             $result = nativephp_call('Audio.load', json_encode($params));
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -53,6 +54,7 @@ class Audio
      * Play an audio file from a URL or local path.
      * Optionally pass track metadata so PlaybackStarted fires with a complete payload
      * and the lock screen / Bluetooth controls are populated immediately.
+     * Fires PlaybackBuffering while fetching and PlaybackReady when buffered.
      *
      * @param  string       $url      URL or local path of the audio file
      * @param  string|null  $title    Track title
@@ -85,9 +87,9 @@ class Audio
             $result = nativephp_call('Audio.play', json_encode($params));
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -103,9 +105,9 @@ class Audio
             $result = nativephp_call('Audio.pause', '{}');
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -121,9 +123,9 @@ class Audio
             $result = nativephp_call('Audio.resume', '{}');
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -139,9 +141,9 @@ class Audio
             $result = nativephp_call('Audio.stop', '{}');
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -150,16 +152,20 @@ class Audio
 
     /**
      * Seek to a specific position in the audio (in seconds)
+     *
+     * @param  float  $seconds  Target position in seconds (must be >= 0)
      */
     public function seek(float $seconds): bool
     {
+        $seconds = max(0.0, $seconds);
+
         if (function_exists('nativephp_call')) {
             $result = nativephp_call('Audio.seek', json_encode(['seconds' => $seconds]));
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -179,9 +185,55 @@ class Audio
             $result = nativephp_call('Audio.setVolume', json_encode(['level' => $level]));
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Set the playback speed.
+     * On Android this requires API 23+; on older versions the rate is stored but not applied.
+     *
+     * @param  float  $rate  Speed multiplier. 1.0 = normal, 0.5 = half speed, 2.0 = double speed.
+     *                       Clamped to the range [0.25, 4.0] by the native layer.
+     */
+    public function setPlaybackRate(float $rate): bool
+    {
+        $rate = max(0.25, min(4.0, $rate));
+
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.setPlaybackRate', json_encode(['rate' => $rate]));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Set how often PlaybackProgressUpdated events fire.
+     *
+     * @param  float  $seconds  Interval in seconds. Clamped to [0.5, 60.0] by the native layer.
+     */
+    public function setProgressInterval(float $seconds): bool
+    {
+        $seconds = max(0.5, min(60.0, $seconds));
+
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.setProgressInterval', json_encode(['seconds' => $seconds]));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -197,9 +249,9 @@ class Audio
             $result = nativephp_call('Audio.getDuration', '{}');
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return isset($decoded->duration) ? (float) $decoded->duration : null;
+                return isset($decoded['duration']) ? (float) $decoded['duration'] : null;
             }
         }
 
@@ -215,9 +267,9 @@ class Audio
             $result = nativephp_call('Audio.getCurrentPosition', '{}');
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return isset($decoded->position) ? (float) $decoded->position : null;
+                return isset($decoded['position']) ? (float) $decoded['position'] : null;
             }
         }
 
@@ -228,7 +280,9 @@ class Audio
      * Get the full current playback state from the native audio layer.
      *
      * Returns an associative array with keys:
-     *   url, position, duration, isPlaying, hasPlayer, title, artist, album, artwork
+     *   url, position, duration, isPlaying, hasPlayer, playbackRate,
+     *   hasPlaylist, playlistIndex, playlistTotal, repeatMode, shuffleMode,
+     *   title, artist, album, artwork, metadata
      *
      * Returns null when not running inside a NativePHP app or the call fails.
      */
@@ -275,6 +329,43 @@ class Audio
     }
 
     /**
+     * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
+     *
+     * @param  string       $title    Track title
+     * @param  string|null  $artist   Artist name
+     * @param  string|null  $album    Album name
+     * @param  string|null  $artwork  URL or local path to artwork image
+     * @param  float|null   $duration Total track duration in seconds
+     */
+    public function setMetadata(
+        string $title,
+        ?string $artist = null,
+        ?string $album = null,
+        ?string $artwork = null,
+        ?float $duration = null,
+    ): bool {
+        if (function_exists('nativephp_call')) {
+            $params = array_filter([
+                'title'    => $title,
+                'artist'   => $artist,
+                'album'    => $album,
+                'artwork'  => $artwork,
+                'duration' => $duration,
+            ], fn ($v) => $v !== null);
+
+            $result = nativephp_call('Audio.setMetadata', json_encode($params));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Set the playlist queue natively so tracks auto-advance in the background on both iOS and Android.
      *
      * Each item in $items must have a 'url' key. Optional keys per item:
@@ -294,9 +385,9 @@ class Audio
             ]));
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -312,9 +403,9 @@ class Audio
             $result = nativephp_call('Audio.nextTrack', '{}');
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -330,9 +421,9 @@ class Audio
             $result = nativephp_call('Audio.previousTrack', '{}');
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -340,7 +431,10 @@ class Audio
     }
 
     /**
-     * Get the current playlist state: items, index, total, repeatMode, shuffleMode
+     * Get the current playlist state.
+     *
+     * Returns an associative array with keys:
+     *   items, index, total, repeatMode, shuffleMode
      */
     public function getPlaylist(): ?array
     {
@@ -358,7 +452,7 @@ class Audio
     }
 
     /**
-     * Set the repeat mode for the active playlist
+     * Set the repeat mode for the active playlist.
      *
      * @param  string  $mode  'none' (default), 'one' (repeat current track), 'all' (repeat playlist)
      */
@@ -368,9 +462,9 @@ class Audio
             $result = nativephp_call('Audio.setRepeatMode', json_encode(['mode' => $mode]));
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 
@@ -378,7 +472,7 @@ class Audio
     }
 
     /**
-     * Enable or disable shuffle mode for the active playlist
+     * Enable or disable shuffle mode for the active playlist.
      *
      * @param  bool  $shuffle  true to shuffle, false to play in order
      */
@@ -388,46 +482,9 @@ class Audio
             $result = nativephp_call('Audio.setShuffleMode', json_encode(['shuffle' => $shuffle]));
 
             if ($result) {
-                $decoded = json_decode($result);
+                $decoded = json_decode($result, true);
 
-                return $decoded->success ?? false;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
-     *
-     * @param  string       $title    Track title
-     * @param  string|null  $artist   Artist name
-     * @param  string|null  $album    Album name
-     * @param  string|null  $artwork  URL or local path to artwork image
-     * @param  float|null   $duration Total track duration in seconds
-     */
-    public function setMetadata(
-        string $title,
-        ?string $artist = null,
-        ?string $album = null,
-        ?string $artwork = null,
-        ?float $duration = null,
-    ): bool {
-        if (function_exists('nativephp_call')) {
-            $params = array_filter([
-                'title' => $title,
-                'artist' => $artist,
-                'album' => $album,
-                'artwork' => $artwork,
-                'duration' => $duration,
-            ], fn ($v) => $v !== null);
-
-            $result = nativephp_call('Audio.setMetadata', json_encode($params));
-
-            if ($result) {
-                $decoded = json_decode($result);
-
-                return $decoded->success ?? false;
+                return (bool) ($decoded['success'] ?? false);
             }
         }
 

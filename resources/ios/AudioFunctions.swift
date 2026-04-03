@@ -10,7 +10,7 @@ enum AudioFunctions {
     private static var playerItem: AVPlayerItem?
     private static var currentURL = ""
 
-    // MARK: - Stored Metadata (single source of truth for now-playing info)
+    // MARK: - Stored Metadata
 
     private static var metaTitle: String?
     private static var metaArtist: String?
@@ -27,6 +27,8 @@ enum AudioFunctions {
     private static var routeChangeObserver: Any?
     private static var progressObserver: Any?
     private static weak var progressObserverPlayer: AVPlayer?
+    private static var bufferingObservation: NSKeyValueObservation?
+    private static var readyObservation: NSKeyValueObservation?
 
     // MARK: - Flags
 
@@ -42,14 +44,15 @@ enum AudioFunctions {
     private static var shuffleMode: Bool = false
     private static var shuffledOrder: [Int] = []
 
+    // MARK: - Playback Settings
+
+    private static var playbackRate: Float = 1.0
+    private static var progressInterval: Double = 10.0
+
     // MARK: - Background Event Queue
 
     private static var isInBackground = false
     private static var pendingEvents: [[String: Any]] = []
-
-    // MARK: - Progress Defaults
-
-    private static let defaultProgressInterval: Double = 10.0
 
     // MARK: - Event Helpers
 
@@ -64,7 +67,12 @@ enum AudioFunctions {
     }
 
     private static func statePayload() -> [String: Any] {
-        ["position": positionSeconds(), "duration": durationSeconds(), "url": currentURL]
+        [
+            "position":  positionSeconds(),
+            "duration":  durationSeconds(),
+            "url":       currentURL,
+            "isPlaying": player?.rate ?? 0 > 0,
+        ]
     }
 
     // MARK: - Position / Duration
@@ -83,9 +91,8 @@ enum AudioFunctions {
 
     /**
      * Called by NativePHP at app launch (registered via nativephp.json init_function).
-     * Configures the AVAudioSession with the .playback category so that audio continues
-     * in the background as soon as the app starts — matching the AppDelegate-level
-     * setup used in the reference implementation.
+     * Configures the AVAudioSession with the .playback category so audio continues
+     * in the background as soon as the app starts.
      */
     static func setupAudioSession() {
         NativePHPPluginRegistry.shared.registerOnAppLaunch("Audio") {
@@ -102,16 +109,12 @@ enum AudioFunctions {
         NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
             object: nil, queue: .main
-        ) { _ in
-            isInBackground = true
-        }
+        ) { _ in isInBackground = true }
 
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil, queue: .main
-        ) { _ in
-            isInBackground = false
-        }
+        ) { _ in isInBackground = false }
     }
 
     // MARK: - Audio Session
@@ -128,10 +131,6 @@ enum AudioFunctions {
 
     // MARK: - Now Playing Info
 
-    /**
-     * Rebuilds MPNowPlayingInfoCenter from stored metadata fields.
-     * Artwork is loaded asynchronously and patched in once available.
-     */
     private static func refreshNowPlayingInfo() {
         guard let title = metaTitle else { return }
         var info: [String: Any] = [MPMediaItemPropertyTitle: title]
@@ -148,10 +147,11 @@ enum AudioFunctions {
     }
 
     /**
-     * Loads artwork from a URL or local file path on a background thread,
-     * then patches it into the existing nowPlayingInfo on the main thread.
+     * Loads artwork on a background thread. Captures the current URL at call time so that
+     * a stale load from a previous track does not overwrite the current track's info.
      */
     private static func loadArtworkAsync(from source: String) {
+        let capturedURL = currentURL
         DispatchQueue.global(qos: .userInitiated).async {
             let image: UIImage?
             if let local = UIImage(contentsOfFile: source) {
@@ -165,6 +165,7 @@ enum AudioFunctions {
             guard let loaded = image else { return }
             let artwork = MPMediaItemArtwork(boundsSize: loaded.size) { _ in loaded }
             DispatchQueue.main.async {
+                guard currentURL == capturedURL else { return }   // Track changed while loading
                 var current = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
                 current[MPMediaItemPropertyArtwork] = artwork
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = current
@@ -173,8 +174,8 @@ enum AudioFunctions {
     }
 
     /**
-     * Writes the current AVPlayer rate and elapsed time into the existing
-     * nowPlayingInfo so the lock-screen scrubber and play/pause icon stay in sync.
+     * Writes the current AVPlayer rate and elapsed time into nowPlayingInfo so the
+     * lock-screen scrubber and play/pause icon stay in sync.
      */
     static func syncNowPlayingState() {
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
@@ -190,16 +191,16 @@ enum AudioFunctions {
         for observer in [completionObserver, failureObserver, interruptionObserver, routeChangeObserver] {
             if let o = observer { NotificationCenter.default.removeObserver(o) }
         }
-        completionObserver  = nil
-        failureObserver     = nil
+        completionObserver   = nil
+        failureObserver      = nil
         interruptionObserver = nil
         routeChangeObserver  = nil
+        bufferingObservation?.invalidate()
+        bufferingObservation = nil
+        readyObservation?.invalidate()
+        readyObservation     = nil
     }
 
-    /**
-     * Fully tears down the player: stops progress timer, releases the AVPlayer,
-     * removes all observers, deactivates the audio session, and clears nowPlayingInfo.
-     */
     private static func resetPlayer() {
         stopProgressTimer()
         player?.pause()
@@ -236,8 +237,9 @@ enum AudioFunctions {
         preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
                       album: album, artwork: artwork, duration: duration, metadata: metadata)
         player?.play()
+        if playbackRate != 1.0 { player?.rate = playbackRate }
         syncNowPlayingState()
-        startProgressTimer(interval: defaultProgressInterval)
+        startProgressTimer(interval: progressInterval)
 
         var trackChangedPayload: [String: Any] = ["index": index, "total": playlist.count, "url": urlString]
         if let t = title    { trackChangedPayload["title"]    = t }
@@ -287,8 +289,7 @@ enum AudioFunctions {
 
     static func stopProgressTimer() {
         if let observer = progressObserver {
-            // removeTimeObserver must be called on the same AVPlayer that added it —
-            // calling it on a different instance raises NSInvalidArgumentException.
+            // removeTimeObserver must be called on the same AVPlayer that added it.
             progressObserverPlayer?.removeTimeObserver(observer)
             progressObserver = nil
             progressObserverPlayer = nil
@@ -307,6 +308,8 @@ enum AudioFunctions {
         center.playCommand.addTarget { _ in
             guard player != nil else { return .noSuchContent }
             player?.play()
+            if playbackRate != 1.0 { player?.rate = playbackRate }
+            startProgressTimer(interval: progressInterval)
             syncNowPlayingState()
             let payload = statePayload()
             sendEvent("PlaybackResumed",    payload)
@@ -318,6 +321,7 @@ enum AudioFunctions {
         center.pauseCommand.addTarget { _ in
             guard player != nil else { return .noSuchContent }
             player?.pause()
+            stopProgressTimer()
             syncNowPlayingState()
             let payload = statePayload()
             sendEvent("PlaybackPaused",      payload)
@@ -328,17 +332,22 @@ enum AudioFunctions {
         center.togglePlayPauseCommand.isEnabled = true
         center.togglePlayPauseCommand.addTarget { _ in
             guard let p = player else { return .noSuchContent }
-            let payload = statePayload()
             if p.rate > 0 {
                 p.pause()
+                stopProgressTimer()
+                syncNowPlayingState()
+                let payload = statePayload()
                 sendEvent("PlaybackPaused",      payload)
                 sendEvent("RemotePauseReceived", payload)
             } else {
                 p.play()
+                if playbackRate != 1.0 { p.rate = playbackRate }
+                startProgressTimer(interval: progressInterval)
+                syncNowPlayingState()
+                let payload = statePayload()
                 sendEvent("PlaybackResumed",    payload)
                 sendEvent("RemotePlayReceived", payload)
             }
-            syncNowPlayingState()
             return .success
         }
 
@@ -385,8 +394,8 @@ enum AudioFunctions {
             guard player != nil else { return .noSuchContent }
             let payload = statePayload()
             resetPlayer()
-            sendEvent("PlaybackStopped",      payload)
-            sendEvent("RemoteStopReceived",   payload)
+            sendEvent("PlaybackStopped",    payload)
+            sendEvent("RemoteStopReceived", payload)
             return .success
         }
     }
@@ -408,6 +417,7 @@ enum AudioFunctions {
                 guard player != nil, player?.rate ?? 0 > 0 else { return }
                 pausedByFocusLoss = true
                 player?.pause()
+                stopProgressTimer()
                 syncNowPlayingState()
                 let payload = statePayload()
                 sendEvent("PlaybackPaused",          payload)
@@ -423,6 +433,8 @@ enum AudioFunctions {
                     pausedByFocusLoss = false
                     try? AVAudioSession.sharedInstance().setActive(true)
                     player?.play()
+                    if playbackRate != 1.0 { player?.rate = playbackRate }
+                    startProgressTimer(interval: progressInterval)
                     syncNowPlayingState()
                     sendEvent("PlaybackResumed", payload)
                 } else {
@@ -444,6 +456,7 @@ enum AudioFunctions {
                   player != nil, player?.rate ?? 0 > 0 else { return }
 
             player?.pause()
+            stopProgressTimer()
             syncNowPlayingState()
             let payload = statePayload()
             sendEvent("PlaybackPaused",          payload)
@@ -451,20 +464,25 @@ enum AudioFunctions {
         }
     }
 
-    // MARK: - Bridge Functions
+    // MARK: - Player Setup
 
     /**
-     * Shared helper that sets up the AVPlayer with a URL and metadata
-     * but does NOT start playback. Used by both Load and Play.
+     * Shared helper used by both Load and Play. Sets up AVPlayer, metadata, and all observers
+     * but does NOT start playback. Callers must call player?.play() themselves.
      */
-    private static func preparePlayer(urlString: String, url: URL, title: String?, artist: String?, album: String?, artwork: String?, duration: Double?, metadata: [String: Any]?) {
-        // Stop progress timer BEFORE replacing the player — removeTimeObserver must be
-        // called on the same AVPlayer instance that added it, otherwise it crashes.
+    private static func preparePlayer(urlString: String, url: URL, title: String?, artist: String?,
+                                      album: String?, artwork: String?, duration: Double?, metadata: [String: Any]?) {
+        // Stop timer BEFORE replacing the player — removeTimeObserver must be called on the
+        // same AVPlayer instance that added it.
         stopProgressTimer()
 
-        // Clean up previous observers
+        // Remove track-specific observers from the outgoing item.
         if let o = completionObserver { NotificationCenter.default.removeObserver(o) }
         if let o = failureObserver    { NotificationCenter.default.removeObserver(o) }
+        bufferingObservation?.invalidate()
+        bufferingObservation = nil
+        readyObservation?.invalidate()
+        readyObservation     = nil
 
         activateAudioSession()
         setupRemoteCommands()
@@ -472,7 +490,7 @@ enum AudioFunctions {
 
         currentURL = urlString
 
-        // Store inline metadata if provided; otherwise preserve metadata from a prior setMetadata call.
+        // Store inline metadata; preserve a prior setMetadata() call when none is provided.
         if title != nil {
             metaTitle         = title
             metaArtist        = artist
@@ -485,22 +503,33 @@ enum AudioFunctions {
         playerItem = AVPlayerItem(url: url)
         player     = AVPlayer(playerItem: playerItem)
 
-        // Apply stored metadata to lock screen / Control Center.
         refreshNowPlayingInfo()
 
-        // Completion observer
+        // Buffering state — fire PlaybackBuffering when the buffer runs dry,
+        // PlaybackReady when there is enough data to play without interruption.
+        bufferingObservation = playerItem?.observe(\.isPlaybackBufferEmpty, options: [.new]) { item, _ in
+            guard item.isPlaybackBufferEmpty else { return }
+            AudioFunctions.sendEvent("PlaybackBuffering", [
+                "url": urlString, "position": AudioFunctions.positionSeconds()
+            ])
+        }
+
+        readyObservation = playerItem?.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { item, _ in
+            guard item.isPlaybackLikelyToKeepUp else { return }
+            AudioFunctions.sendEvent("PlaybackReady", [
+                "url": urlString, "duration": AudioFunctions.durationSeconds()
+            ])
+        }
+
         completionObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem, queue: .main
         ) { _ in
             stopProgressTimer()
-            sendEvent("PlaybackCompleted", [
-                "url": urlString, "duration": durationSeconds()
-            ])
+            sendEvent("PlaybackCompleted", ["url": urlString, "duration": durationSeconds()])
             advancePlaylist()
         }
 
-        // Failure observer
         failureObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: playerItem, queue: .main
@@ -511,6 +540,8 @@ enum AudioFunctions {
             sendEvent("PlaybackFailed", ["url": urlString, "error": error])
         }
     }
+
+    // MARK: - Bridge Functions
 
     class Load: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
@@ -529,9 +560,8 @@ enum AudioFunctions {
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
             let metadata = parameters["metadata"] as? [String: Any]
 
-            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration, metadata: metadata)
-
-            // Do NOT call player?.play() — audio is loaded but paused.
+            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
+                                         album: album, artwork: artwork, duration: duration, metadata: metadata)
             AudioFunctions.syncNowPlayingState()
 
             var loadedPayload: [String: Any] = ["url": urlString]
@@ -563,12 +593,13 @@ enum AudioFunctions {
             let duration = (parameters["duration"] as? NSNumber)?.doubleValue
             let metadata = parameters["metadata"] as? [String: Any]
 
-            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist, album: album, artwork: artwork, duration: duration, metadata: metadata)
+            AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
+                                         album: album, artwork: artwork, duration: duration, metadata: metadata)
 
             AudioFunctions.player?.play()
-            // Sync rate/elapsed after play() so the lock screen shows the correct state.
+            if AudioFunctions.playbackRate != 1.0 { AudioFunctions.player?.rate = AudioFunctions.playbackRate }
             AudioFunctions.syncNowPlayingState()
-            AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
+            AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
 
             var startedPayload: [String: Any] = ["url": urlString]
             if let t = title    { startedPayload["title"]    = t }
@@ -585,8 +616,8 @@ enum AudioFunctions {
     class Pause: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.player?.pause()
+            AudioFunctions.stopProgressTimer()
             AudioFunctions.syncNowPlayingState()
-            AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
             AudioFunctions.sendEvent("PlaybackPaused", AudioFunctions.statePayload())
             return BridgeResponse.success(data: ["success": true])
         }
@@ -596,8 +627,9 @@ enum AudioFunctions {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             AudioFunctions.activateAudioSession()
             AudioFunctions.player?.play()
+            if AudioFunctions.playbackRate != 1.0 { AudioFunctions.player?.rate = AudioFunctions.playbackRate }
             AudioFunctions.syncNowPlayingState()
-            AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
+            AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
             AudioFunctions.sendEvent("PlaybackResumed", AudioFunctions.statePayload())
             return BridgeResponse.success(data: ["success": true])
         }
@@ -614,11 +646,12 @@ enum AudioFunctions {
 
     class Seek: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let seconds  = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
+            let seconds  = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
             let from     = AudioFunctions.positionSeconds()
             let duration = AudioFunctions.durationSeconds()
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
-                AudioFunctions.startProgressTimer(interval: AudioFunctions.defaultProgressInterval)
+                AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
+                AudioFunctions.syncNowPlayingState()
                 AudioFunctions.sendEvent("PlaybackSeeked", [
                     "from": from, "to": seconds, "duration": duration, "url": AudioFunctions.currentURL
                 ])
@@ -629,8 +662,36 @@ enum AudioFunctions {
 
     class SetVolume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            AudioFunctions.player?.volume = (parameters["level"] as? NSNumber)?.floatValue ?? 1.0
+            let level = max(0.0, min(1.0, (parameters["level"] as? NSNumber)?.floatValue ?? 1.0))
+            AudioFunctions.player?.volume = level
             return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class SetPlaybackRate: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let rate    = (parameters["rate"] as? NSNumber)?.floatValue ?? 1.0
+            let clamped = max(0.25, min(4.0, rate))
+            AudioFunctions.playbackRate = clamped
+            // Apply immediately if already playing.
+            if let p = AudioFunctions.player, p.rate > 0 {
+                p.rate = clamped
+                AudioFunctions.syncNowPlayingState()
+            }
+            return BridgeResponse.success(data: ["success": true, "rate": clamped])
+        }
+    }
+
+    class SetProgressInterval: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let seconds = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 10.0
+            let clamped = max(0.5, min(60.0, seconds))
+            AudioFunctions.progressInterval = clamped
+            // Restart the timer immediately if playing so it fires on the new interval.
+            if AudioFunctions.player?.rate ?? 0 > 0 {
+                AudioFunctions.startProgressTimer(interval: clamped)
+            }
+            return BridgeResponse.success(data: ["success": true, "seconds": clamped])
         }
     }
 
@@ -646,40 +707,32 @@ enum AudioFunctions {
         }
     }
 
-    /**
-     * Returns the full current playback state from the native layer.
-     * Used by PHP to reconcile state after a runtime restart (e.g. OS killed PHP in background).
-     *
-     * Returns: url, position, duration, isPlaying, title, artist, album, artwork, hasPlayer
-     */
     class GetState: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             var state: [String: Any] = [
-                "url":        AudioFunctions.currentURL,
-                "position":   AudioFunctions.positionSeconds(),
-                "duration":   AudioFunctions.durationSeconds(),
-                "isPlaying":  AudioFunctions.player?.rate ?? 0 > 0,
-                "hasPlayer":  AudioFunctions.player != nil,
+                "url":           AudioFunctions.currentURL,
+                "position":      AudioFunctions.positionSeconds(),
+                "duration":      AudioFunctions.durationSeconds(),
+                "isPlaying":     AudioFunctions.player?.rate ?? 0 > 0,
+                "hasPlayer":     AudioFunctions.player != nil,
+                "playbackRate":  AudioFunctions.playbackRate,
+                "hasPlaylist":   !AudioFunctions.playlist.isEmpty,
+                "playlistIndex": AudioFunctions.playlistIndex,
+                "playlistTotal": AudioFunctions.playlist.count,
+                "repeatMode":    AudioFunctions.repeatMode,
+                "shuffleMode":   AudioFunctions.shuffleMode,
             ]
             if let t = AudioFunctions.metaTitle         { state["title"]    = t }
-            if let a = AudioFunctions.metaArtist         { state["artist"]   = a }
-            if let a = AudioFunctions.metaAlbum          { state["album"]    = a }
-            if let d = AudioFunctions.metaDuration       { state["duration"] = d }
-            if let w = AudioFunctions.metaArtworkSource  { state["artwork"]  = w }
-            if let m = AudioFunctions.metaMetadata  { state["metadata"]  = m }
+            if let a = AudioFunctions.metaArtist        { state["artist"]   = a }
+            if let a = AudioFunctions.metaAlbum         { state["album"]    = a }
+            if let d = AudioFunctions.metaDuration      { state["duration"] = d }
+            if let w = AudioFunctions.metaArtworkSource { state["artwork"]  = w }
+            if let m = AudioFunctions.metaMetadata      { state["metadata"] = m }
 
             return BridgeResponse.success(data: state)
         }
     }
 
-    /**
-     * Returns all events that were queued while the app was in the background,
-     * then clears the queue. Call this when the app returns to the foreground
-     * to replay missed events through Livewire.
-     *
-     * Each entry in the returned array has the shape:
-     *   { "event": "EventName", "payload": { ... } }
-     */
     class DrainEvents: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let events = AudioFunctions.pendingEvents
@@ -689,11 +742,8 @@ enum AudioFunctions {
     }
 
     /**
-     * Sets track metadata on MPNowPlayingInfoCenter for display on lock screens,
-     * Control Center, Bluetooth devices, and CarPlay.
-     *
-     * Safe to call before Play — metadata is stored and applied when Play starts.
-     * Safe to call after Play — lock screen updates immediately.
+     * Sets track metadata on MPNowPlayingInfoCenter for lock screens, Control Center,
+     * Bluetooth devices, and CarPlay. Safe to call before or after Play.
      */
     class SetMetadata: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
@@ -701,15 +751,12 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "title is required.")
             }
 
-            // Replace all stored metadata (nil fields are intentionally cleared).
             AudioFunctions.metaTitle         = title
             AudioFunctions.metaArtist        = parameters["artist"]   as? String
             AudioFunctions.metaAlbum         = parameters["album"]    as? String
             AudioFunctions.metaDuration      = (parameters["duration"] as? NSNumber)?.doubleValue
             AudioFunctions.metaArtworkSource = parameters["artwork"]  as? String
 
-            // Ensure the audio session and remote commands are ready so the lock screen
-            // shows metadata even before Play is called.
             DispatchQueue.main.async {
                 AudioFunctions.activateAudioSession()
                 AudioFunctions.setupRemoteCommands()
@@ -723,8 +770,6 @@ enum AudioFunctions {
     /**
      * Sets the playlist queue natively so tracks auto-advance in the background.
      * Each item must have a "url" key; title/artist/album/artwork/duration/metadata are optional.
-     * Pass autoPlay: false to load the queue without starting playback immediately.
-     * Pass startIndex to begin at a specific track (default: 0).
      */
     class SetPlaylist: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
@@ -754,9 +799,6 @@ enum AudioFunctions {
         }
     }
 
-    /**
-     * Skips to the next track in the active playlist.
-     */
     class NextTrack: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             guard !AudioFunctions.playlist.isEmpty else {
@@ -770,9 +812,6 @@ enum AudioFunctions {
         }
     }
 
-    /**
-     * Skips to the previous track in the active playlist.
-     */
     class PreviousTrack: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             guard !AudioFunctions.playlist.isEmpty else {
@@ -783,9 +822,6 @@ enum AudioFunctions {
         }
     }
 
-    /**
-     * Returns the current playlist queue and playback state.
-     */
     class GetPlaylist: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             return BridgeResponse.success(data: [
@@ -798,9 +834,6 @@ enum AudioFunctions {
         }
     }
 
-    /**
-     * Sets the repeat mode: "none" (default), "one" (repeat current track), "all" (repeat playlist).
-     */
     class SetRepeatMode: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let mode = parameters["mode"] as? String ?? "none"
@@ -808,13 +841,11 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "mode must be 'none', 'one', or 'all'.")
             }
             AudioFunctions.repeatMode = mode
+            AudioFunctions.sendEvent("PlaylistRepeatModeChanged", ["mode": mode])
             return BridgeResponse.success(data: ["success": true])
         }
     }
 
-    /**
-     * Enables or disables shuffle mode. When enabled, a new random play order is generated.
-     */
     class SetShuffleMode: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let shuffle = parameters["shuffle"] as? Bool ?? false
@@ -824,6 +855,7 @@ enum AudioFunctions {
             } else {
                 AudioFunctions.shuffledOrder = []
             }
+            AudioFunctions.sendEvent("PlaylistShuffleChanged", ["shuffle": shuffle])
             return BridgeResponse.success(data: ["success": true])
         }
     }
