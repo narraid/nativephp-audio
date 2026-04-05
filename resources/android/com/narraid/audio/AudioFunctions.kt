@@ -444,6 +444,7 @@ class AudioFunctions {
                 metaArtist        = artist
                 metaAlbum         = album
                 metaDurationMs    = duration?.let { (it * 1000).toLong() }
+                if (artwork != metaArtworkSource) currentArtwork = null
                 metaArtworkSource = artwork
                 metaClip          = clip
                 metaMetadata      = metadata
