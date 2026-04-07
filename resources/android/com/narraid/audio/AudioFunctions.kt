@@ -60,6 +60,7 @@ class AudioFunctions {
         // ── Playback Settings ─────────────────────────────────────────────────
         private var playbackRate: Float = 1.0f
         private var preferredProgressIntervalMs: Long = DEFAULT_PROGRESS_INTERVAL_MS
+        private var pendingSeekMs: Int? = null
 
         // ── Progress Timer ────────────────────────────────────────────────────
         private const val DEFAULT_PROGRESS_INTERVAL_MS: Long = 10_000
@@ -475,6 +476,7 @@ class AudioFunctions {
                         setOnPreparedListener { mp ->
                             mp.setVolume(userVolume, userVolume)
                             applyPlaybackRate()
+                            pendingSeekMs?.let { ms -> mp.seekTo(ms); pendingSeekMs = null }
                             requestAudioFocus(ctx)
                             mp.start()
                             updateSessionState()
@@ -799,6 +801,10 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             val params   = JSONObject(parameters)
             val seconds  = maxOf(0.0, params.optDouble("seconds", 0.0))
+            if (mediaPlayer == null) {
+                pendingSeekMs = (seconds * 1000).toInt()
+                return mapOf("success" to true)
+            }
             val from     = positionSeconds()
             val duration = durationSeconds()
             mediaPlayer?.seekTo((seconds * 1000).toInt())

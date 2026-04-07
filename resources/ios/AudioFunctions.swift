@@ -50,6 +50,7 @@ enum AudioFunctions {
 
     private static var playbackRate: Float = 1.0
     private static var progressInterval: Double = 10.0
+    private static var pendingSeekSeconds: Double? = nil
 
     // MARK: - Sleep Timer
 
@@ -255,6 +256,10 @@ enum AudioFunctions {
 
         preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
                       album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
+        if let seekSecs = pendingSeekSeconds {
+            player?.seek(to: CMTime(seconds: seekSecs, preferredTimescale: 600))
+            pendingSeekSeconds = nil
+        }
         player?.play()
         if playbackRate != 1.0 { player?.rate = playbackRate }
         syncNowPlayingState()
@@ -704,7 +709,11 @@ enum AudioFunctions {
 
     class Seek: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let seconds  = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
+            let seconds = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
+            guard AudioFunctions.player != nil else {
+                AudioFunctions.pendingSeekSeconds = seconds
+                return BridgeResponse.success(data: ["success": true])
+            }
             let from     = AudioFunctions.positionSeconds()
             let duration = AudioFunctions.durationSeconds()
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
