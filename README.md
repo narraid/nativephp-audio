@@ -688,5 +688,20 @@ Changes made to AudioFunctions.swift (Swift):
 - Load class: reads clip, passes to preparePlayer, adds artwork/clip to PlaybackLoaded payload
 - Play class: reads clip, passes to preparePlayer, adds artwork/clip to PlaybackStarted payload
 - playTrackAt: reads clip from track, passes to preparePlayer, adds artwork/clip to both PlaylistTrackChanged and PlaybackStarted payloads                                                                                                  
-                                                                                                                                                              
 
+
+All three files updated. Here's a summary of what changed:
+
+PHP (Audio.php): Added int $seconds = 0 parameter, passed as startSeconds in the JSON payload.
+
+iOS (AudioFunctions.swift):
+- playTrackAt(index:) → playTrackAt(index:seekTo:) with seekTo: Double = 0 default
+- After player?.play(), calls player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) when seekTo > 0
+- SetPlaylist.execute reads startSeconds and forwards it to playTrackAt
+
+Android (AudioFunctions.kt):
+- playTrackAt(index:) → playTrackAt(index:seekToSeconds:) with seekToSeconds: Double = 0.0 default
+- In setOnPreparedListener, after mp.start(), calls mp.seekTo((seekToSeconds * 1000).toInt()) when seekToSeconds > 0
+- SetPlaylist.execute reads startSeconds and forwards it to playTrackAt
+
+All existing callers (advancePlaylist, NextTrack, PreviousTrack, Resume) use the default 0 so they're unaffected.     

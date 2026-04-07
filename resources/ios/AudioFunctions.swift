@@ -237,7 +237,7 @@ enum AudioFunctions {
         return shuffledOrder[logicalIndex]
     }
 
-    private static func playTrackAt(index: Int) {
+    private static func playTrackAt(index: Int, seekTo: Double = 0) {
         guard index >= 0, index < playlist.count else { return }
         playlistIndex = index
         let track = playlist[effectivePlaylistIndex(for: index)]
@@ -257,6 +257,7 @@ enum AudioFunctions {
                       album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
         player?.play()
         if playbackRate != 1.0 { player?.rate = playbackRate }
+        if seekTo > 0 { player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) }
         syncNowPlayingState()
         startProgressTimer(interval: progressInterval)
 
@@ -837,8 +838,9 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "items must be a non-empty array of track objects.")
             }
 
-            let autoPlay   = parameters["autoPlay"]   as? Bool ?? true
-            let startIndex = (parameters["startIndex"] as? NSNumber)?.intValue ?? 0
+            let autoPlay    = parameters["autoPlay"]    as? Bool ?? true
+            let startIndex  = (parameters["startIndex"]  as? NSNumber)?.intValue  ?? 0
+            let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0
 
             AudioFunctions.playlist      = items
             AudioFunctions.playlistIndex = -1
@@ -852,7 +854,7 @@ enum AudioFunctions {
             AudioFunctions.sendEvent("PlaylistSet", ["total": items.count])
 
             if autoPlay {
-                AudioFunctions.playTrackAt(index: startIndex)
+                AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds)
             } else {
                 AudioFunctions.playlistIndex = startIndex
             }

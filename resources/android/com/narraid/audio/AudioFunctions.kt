@@ -415,7 +415,7 @@ class AudioFunctions {
         private fun effectiveTrackIndex(logicalIndex: Int): Int =
             if (shuffledOrder.isNotEmpty()) shuffledOrder.getOrNull(logicalIndex) ?: logicalIndex else logicalIndex
 
-        internal fun playTrackAt(index: Int) {
+        internal fun playTrackAt(index: Int, seekToSeconds: Double = 0.0) {
             if (index < 0 || index >= playlist.size) return
 
             // Resolve a live context — prefer the current activity, fall back to appContext.
@@ -477,6 +477,7 @@ class AudioFunctions {
                             applyPlaybackRate()
                             requestAudioFocus(ctx)
                             mp.start()
+                            if (seekToSeconds > 0) mp.seekTo((seekToSeconds * 1000).toInt())
                             updateSessionState()
                             startProgressTimer(preferredProgressIntervalMs)
                             AudioService.start(ctx, metaTitle ?: "Now Playing", metaArtist)
@@ -940,12 +941,13 @@ class AudioFunctions {
                 shuffledOrder.clear()
             }
 
-            val autoPlay   = params.optBoolean("autoPlay", true)
-            val startIndex = params.optInt("startIndex", 0)
+            val autoPlay     = params.optBoolean("autoPlay", true)
+            val startIndex   = params.optInt("startIndex", 0)
+            val startSeconds = params.optDouble("startSeconds", 0.0)
 
             sendEvent("PlaylistSet", mapOf("total" to playlist.size))
             if (autoPlay) {
-                playTrackAt(startIndex)
+                playTrackAt(startIndex, startSeconds)
             } else {
                 playlistIndex = startIndex
             }
