@@ -770,6 +770,11 @@ class AudioFunctions {
 
     class Resume(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            // Cold-start: playlist was set with autoPlay=false, no player exists yet
+            if (mediaPlayer == null && playlist.isNotEmpty() && playlistIndex >= 0) {
+                playTrackAt(playlistIndex)
+                return mapOf("success" to true)
+            }
             requestAudioFocus(context)
             mediaPlayer?.start()
             applyPlaybackRate()
@@ -939,7 +944,11 @@ class AudioFunctions {
             val startIndex = params.optInt("startIndex", 0)
 
             sendEvent("PlaylistSet", mapOf("total" to playlist.size))
-            if (autoPlay) playTrackAt(startIndex)
+            if (autoPlay) {
+                playTrackAt(startIndex)
+            } else {
+                playlistIndex = startIndex
+            }
 
             return mapOf("success" to true)
         }

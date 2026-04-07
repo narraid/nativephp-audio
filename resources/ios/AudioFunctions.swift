@@ -678,6 +678,11 @@ enum AudioFunctions {
 
     class Resume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            // Cold-start: playlist was set with autoPlay=false, no player exists yet
+            if AudioFunctions.player == nil && !AudioFunctions.playlist.isEmpty && AudioFunctions.playlistIndex >= 0 {
+                AudioFunctions.playTrackAt(index: AudioFunctions.playlistIndex)
+                return BridgeResponse.success(data: ["success": true])
+            }
             AudioFunctions.activateAudioSession()
             AudioFunctions.player?.play()
             if AudioFunctions.playbackRate != 1.0 { AudioFunctions.player?.rate = AudioFunctions.playbackRate }
@@ -848,6 +853,8 @@ enum AudioFunctions {
 
             if autoPlay {
                 AudioFunctions.playTrackAt(index: startIndex)
+            } else {
+                AudioFunctions.playlistIndex = startIndex
             }
 
             return BridgeResponse.success(data: ["success": true])
