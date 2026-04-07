@@ -69,6 +69,7 @@ class AudioFunctions {
         // ── Playlist State ────────────────────────────────────────────────────
         private val playlist: MutableList<Map<String, Any>> = mutableListOf()
         private var playlistIndex: Int = -1
+        private var pendingSeekSeconds: Double = 0.0
         private var repeatMode: String = "none"
         private var shuffleMode: Boolean = false
         private val shuffledOrder: MutableList<Int> = mutableListOf()
@@ -773,7 +774,9 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             // Cold-start: playlist was set with autoPlay=false, no player exists yet
             if (mediaPlayer == null && playlist.isNotEmpty() && playlistIndex >= 0) {
-                playTrackAt(playlistIndex)
+                val seekTo = pendingSeekSeconds
+                pendingSeekSeconds = 0.0
+                playTrackAt(playlistIndex, seekTo)
                 return mapOf("success" to true)
             }
             requestAudioFocus(context)
@@ -949,7 +952,8 @@ class AudioFunctions {
             if (autoPlay) {
                 playTrackAt(startIndex, startSeconds)
             } else {
-                playlistIndex = startIndex
+                playlistIndex       = startIndex
+                pendingSeekSeconds  = startSeconds
             }
 
             return mapOf("success" to true)

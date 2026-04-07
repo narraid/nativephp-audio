@@ -42,6 +42,7 @@ enum AudioFunctions {
 
     private static var playlist: [[String: Any]] = []
     private static var playlistIndex: Int = -1
+    private static var pendingSeekSeconds: Double = 0
     private static var repeatMode: String = "none"
     private static var shuffleMode: Bool = false
     private static var shuffledOrder: [Int] = []
@@ -681,7 +682,9 @@ enum AudioFunctions {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             // Cold-start: playlist was set with autoPlay=false, no player exists yet
             if AudioFunctions.player == nil && !AudioFunctions.playlist.isEmpty && AudioFunctions.playlistIndex >= 0 {
-                AudioFunctions.playTrackAt(index: AudioFunctions.playlistIndex)
+                let seekTo = AudioFunctions.pendingSeekSeconds
+                AudioFunctions.pendingSeekSeconds = 0
+                AudioFunctions.playTrackAt(index: AudioFunctions.playlistIndex, seekTo: seekTo)
                 return BridgeResponse.success(data: ["success": true])
             }
             AudioFunctions.activateAudioSession()
@@ -856,7 +859,8 @@ enum AudioFunctions {
             if autoPlay {
                 AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds)
             } else {
-                AudioFunctions.playlistIndex = startIndex
+                AudioFunctions.playlistIndex    = startIndex
+                AudioFunctions.pendingSeekSeconds = startSeconds
             }
 
             return BridgeResponse.success(data: ["success": true])
