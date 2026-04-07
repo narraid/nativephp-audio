@@ -272,7 +272,7 @@ enum AudioFunctions {
         if let m = metadata { trackChangedPayload["metadata"] = m }
         sendEvent("PlaylistTrackChanged", trackChangedPayload)
 
-        var startedPayload: [String: Any] = ["url": urlString]
+        var startedPayload: [String: Any] = ["url": urlString, "position": seekTo]
         if let t = title    { startedPayload["title"]    = t }
         if let a = artist   { startedPayload["artist"]   = a }
         if let a = album    { startedPayload["album"]    = a }
@@ -654,7 +654,7 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
 
-            var startedPayload: [String: Any] = ["url": urlString]
+            var startedPayload: [String: Any] = ["url": urlString, "position": 0.0]
             if let t = title    { startedPayload["title"]    = t }
             if let a = artist   { startedPayload["artist"]   = a }
             if let a = album    { startedPayload["album"]    = a }

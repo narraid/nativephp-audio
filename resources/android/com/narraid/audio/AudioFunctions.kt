@@ -495,7 +495,7 @@ class AudioFunctions {
                             metadata?.let { trackChangedPayload["metadata"] = it }
                             sendEvent("PlaylistTrackChanged", trackChangedPayload)
 
-                            val startedPayload = mutableMapOf<String, Any>("url" to url)
+                            val startedPayload = mutableMapOf<String, Any>("url" to url, "position" to seekToSeconds)
                             title?.let    { startedPayload["title"]    = it }
                             artist?.let   { startedPayload["artist"]   = it }
                             album?.let    { startedPayload["album"]    = it }
@@ -737,7 +737,7 @@ class AudioFunctions {
                             startProgressTimer(preferredProgressIntervalMs)
                             AudioService.start(activity, metaTitle ?: "Now Playing", metaArtist)
 
-                            val payload = mutableMapOf<String, Any>("url" to url)
+                            val payload = mutableMapOf<String, Any>("url" to url, "position" to 0.0)
                             title?.let    { payload["title"]    = it }
                             artist?.let   { payload["artist"]   = it }
                             album?.let    { payload["album"]    = it }

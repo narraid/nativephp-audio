@@ -11,6 +11,7 @@ class PlaybackStarted
 
     public function __construct(
         public string $url,
+        public float $position = 0.0,
         public ?string $title = null,
         public ?string $artist = null,
         public ?string $album = null,
