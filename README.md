@@ -498,3 +498,210 @@ match ($queued['event']) {
 }
 
 Call Audio::drainEvents() in your Livewire component's mount() or wherever you handle app resume — all missed events will be returned and the queue cleared.
+
+
+ ---                                                                                     
+What was built
+
+How it works
+
+The playlist queue is managed entirely in native code (Swift/Kotlin). When a track completes, the native layer picks the next track from its internal queue and plays it directly — no   
+round trip to PHP required. This means playlist auto-advance works in the background on both iOS and Android.
+
+New PHP API
+
+Audio::setPlaylist($items, autoPlay: true, startIndex: 0)                                                                                                                                
+Audio::nextTrack()                                                                                                                                                                       
+Audio::previousTrack()
+Audio::getPlaylist()           // returns items, index, total, repeatMode, shuffleMode                                                                                                   
+Audio::setRepeatMode('none')  // 'none' | 'one' | 'all'                                                                                                                                  
+Audio::setShuffleMode(true)
+
+Each item in $items needs url, and optionally title, artist, album, artwork, duration, metadata.
+
+New Events
+
+┌──────────────────────┬───────────────────────────────────┬────────────────────────────────────────┐                                                                                    
+│        Event         │              Payload              │               Fired when               │
+├──────────────────────┼───────────────────────────────────┼────────────────────────────────────────┤                                                                                    
+│ PlaylistSet          │ total                             │ setPlaylist() is called                │                                                                                  
+├──────────────────────┼───────────────────────────────────┼────────────────────────────────────────┤
+│ PlaylistTrackChanged │ index, total, url, track metadata │ Auto-advance or skip to next/previous  │                                                                                    
+├──────────────────────┼───────────────────────────────────┼────────────────────────────────────────┤                                                                                    
+│ PlaylistEnded        │ total                             │ All tracks played with repeatMode=none │                                                                                    
+└──────────────────────┴───────────────────────────────────┴────────────────────────────────────────┘
+
+Custom DOM events in JS: audio-playlist-set, audio-playlist-track-changed, audio-playlist-ended.
+
+Key behaviour
+
+- Calling Audio::play() or Audio::load() directly clears the active playlist
+- Lock screen / Bluetooth next/previous buttons navigate the playlist natively
+- Shuffle generates a random play order at setPlaylist/setShuffleMode time
+- stopProgressTimer() was already commented out in ON_PAUSE on Android (kept as-is) so progress continues while backgrounded        
+
+Here's an example of the tracks array for setPlaylist():
+
+PHP:
+Audio::setPlaylist([
+[
+'url'      => 'https://example.com/track1.mp3',
+'title'    => 'Song One',
+'artist'   => 'Artist Name',
+'album'    => 'Album Title',
+'artwork'  => 'https://example.com/cover.jpg',
+'duration' => 213.5,
+],
+[
+'url'      => 'https://example.com/track2.mp3',
+'title'    => 'Song Two',
+'artist'   => 'Artist Name',
+'album'    => 'Album Title',
+'artwork'  => 'https://example.com/cover2.jpg',
+'duration' => 187.0,
+],
+[
+'url'   => 'https://example.com/track3.mp3',
+'title' => 'Song Three',
+// artist, album, artwork, duration are all optional
+],
+]);
+
+JavaScript:
+await audioPlayer.setPlaylist([
+{                          
+url:      'https://example.com/track1.mp3',                                                                                                                                      
+title:    'Song One',                      
+artist:   'Artist Name',                                                                                                                                                         
+album:    'Album Title',                          
+artwork:  'https://example.com/cover.jpg',
+duration: 213.5,                                                                                                                                                                 
+},                  
+{                                                                                                                                                                                    
+url:    'https://example.com/track2.mp3',         
+title:  'Song Two',                      
+artist: 'Artist Name',
+},                                                                                                                                                                                   
+], { autoPlay: true, startIndex: 0 });
+
+Only url is required per track. Everything else is optional but recommended — title, artist, artwork populate the lock screen and notification controls.
+
+You can also pass arbitrary extra data via metadata:                                                                                                                                     
+[                                                                                                                                                                                        
+'url'      => 'https://example.com/track1.mp3',                                                                                                                                      
+'title'    => 'Song One',                                                                                                                                                            
+'metadata' => ['id' => 42, 'genre' => 'rock'],
+]
+
+That metadata comes back in PlaylistTrackChanged so you can identify which track is playing in your Laravel listeners.
+
+PHP Event Classes (15 files fixed)
+- Added public bool $isPlaying to 13 statePayload-based events: PlaybackPaused, PlaybackResumed, PlaybackStopped, PlaybackProgressUpdated, RemotePlayReceived, RemotePauseReceived,
+  RemoteNextTrackReceived, RemotePreviousTrackReceived, RemoteStopReceived, AudioFocusLost, AudioFocusLostTransient, AudioFocusDucked, AudioFocusGained
+- Added ?array $metadata = null to PlaybackLoaded and PlaybackStarted
+- Created SleepTimerExpired.php event class
+
+Android (AudioFunctions.kt)
+- Fixed effectiveTrackIndex — now uses .getOrNull() to prevent IndexOutOfBoundsException on shuffle
+- Fixed progress timer race — added if (progressRunnable !== this) return guard
+- Added updateSessionState() to Seek.execute()
+- Extracted attachCommonListeners() — eliminated ~75 lines of duplicated listener setup from Load, Play, and playTrackAt
+- Added isBuffering state tracking (set in buffering/ready/completion/error/release handlers)
+- Added isBuffering to statePayload() and GetState
+- Added startSleepTimer() / cancelSleepTimer() (cancelled on releasePlayer())
+- Added bridge classes: SetSleepTimer, CancelSleepTimer, AppendTrack, RemoveTrack
+
+iOS (AudioFunctions.swift)
+- Added isBuffering state tracking (set in KVO observers, reset on resetPlayer() and track change)
+- Added isBuffering to statePayload() and GetState
+- Added sleepTimer: DispatchWorkItem? with startSleepTimer() / cancelSleepTimer() (cancelled on resetPlayer())
+- Added bridge classes: SetSleepTimer, CancelSleepTimer, AppendTrack, RemoveTrack
+
+API Surface (all layers updated)
+- src/Audio.php — added setSleepTimer, cancelSleepTimer, appendTrack, removeTrack
+- src/Facades/Audio.php — added @method entries for the 4 new methods
+- resources/js/audio.js — added 4 new JS methods
+- resources/views/bridge.blade.php — added SleepTimerExpired → audio-sleep-timer-expired DOM event
+- nativephp.json — registered 4 new bridge functions and SleepTimerExpired event
+  Now verify everything looks correct:
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+⏺ All 21 url-bearing event classes now carry ?array $metadata = null. On both platforms, metaMetadata is included in every event payload — via statePayload() for the 13 state-based
+events, and via withMeta()/metaPayload() for PlaybackBuffering, PlaybackReady, PlaybackCompleted, PlaybackFailed, PlaybackSeeked, and RemoteSeekReceived.
+
+The metadata flows through automatically: when a track is loaded (via play(), load(), or playlist auto-advance), metaMetadata is stored from the track's metadata field, and every
+subsequent event for that track carries it along.
+
+
+Here's exactly what to call for each scenario:
+
+  ---
+Scenario 1: Click a song to set the playlist and start from that track
+
+Use setPlaylist() with the startIndex pointing to the clicked track:
+
+JavaScript:
+await audioPlayer.setPlaylist(playlistItems, { autoPlay: true, startIndex: clickedIndex });
+
+PHP:
+Audio::setPlaylist($playlistItems, autoPlay: true, startIndex: $clickedIndex);
+
+Where playlistItems is the full array of tracks and clickedIndex is the 0-based position of the song they clicked.
+
+  ---
+Scenario 2: Click a different track in the same already-active playlist
+
+You have two options depending on your preference:
+
+Option A — Use setPlaylist() again (simpler, resets playlist state):
+await audioPlayer.setPlaylist(playlistItems, { autoPlay: true, startIndex: newClickedIndex });
+
+Option B — Jump directly to the track (if the native side supports direct index seek — but there's no skipToTrack(index) function in this API). You'd need to call nextTrack() / previousTrack() repeatedly, which isn't practical.
+
+Recommendation: use setPlaylist() for both scenarios. Detect whether the same playlist is already loaded, and if so, still call setPlaylist() with the new startIndex. It resets cleanly and is idempotent.
+
+  ---
+Practical click handler pattern
+
+function onTrackClick(playlistItems, clickedIndex) {
+audioPlayer.setPlaylist(playlistItems, { autoPlay: true, startIndex: clickedIndex });
+}
+
+Same function handles both cases — first click on a playlist or switching to a different track within it.
+
+ll changes are done. Here's a summary of what was missing and what was fixed:
+
+Both files were missing:
+- clip field — not parsed from params, not stored, not in event payloads
+- artwork — was parsed and stored, but not included in event payloads (PlaybackLoaded, PlaybackStarted, PlaylistTrackChanged)
+
+Changes made to AudioFunctions.kt (Kotlin):
+- Added private var metaClip: String? = null
+- Load class: reads clip, stores metaClip, adds artwork/clip to PlaybackLoaded payload
+- Play class: reads clip, stores metaClip, adds artwork/clip to PlaybackStarted payload
+- playTrackAt: reads clip from track, stores metaClip, adds artwork/clip to both PlaylistTrackChanged and PlaybackStarted payloads
+
+Changes made to AudioFunctions.swift (Swift):
+- Added private static var metaClip: String?
+- preparePlayer: added clip parameter, stores metaClip
+- Load class: reads clip, passes to preparePlayer, adds artwork/clip to PlaybackLoaded payload
+- Play class: reads clip, passes to preparePlayer, adds artwork/clip to PlaybackStarted payload
+- playTrackAt: reads clip from track, passes to preparePlayer, adds artwork/clip to both PlaylistTrackChanged and PlaybackStarted payloads                                                                                                  
+
+
+All three files updated. Here's a summary of what changed:
+
+PHP (Audio.php): Added int $seconds = 0 parameter, passed as startSeconds in the JSON payload.
+
+iOS (AudioFunctions.swift):
+- playTrackAt(index:) → playTrackAt(index:seekTo:) with seekTo: Double = 0 default
+- After player?.play(), calls player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) when seekTo > 0
+- SetPlaylist.execute reads startSeconds and forwards it to playTrackAt
+
+Android (AudioFunctions.kt):
+- playTrackAt(index:) → playTrackAt(index:seekToSeconds:) with seekToSeconds: Double = 0.0 default
+- In setOnPreparedListener, after mp.start(), calls mp.seekTo((seekToSeconds * 1000).toInt()) when seekToSeconds > 0
+- SetPlaylist.execute reads startSeconds and forwards it to playTrackAt
+
+All existing callers (advancePlaylist, NextTrack, PreviousTrack, Resume) use the default 0 so they're unaffected.     

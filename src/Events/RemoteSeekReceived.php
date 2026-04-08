@@ -14,6 +14,7 @@ class RemoteSeekReceived
         public float $position,
         public float $duration,
         public float $seekTo,
+        public ?array $metadata = null,
     ) {
     }
 }

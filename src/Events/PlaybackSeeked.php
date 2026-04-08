@@ -14,6 +14,7 @@ class PlaybackSeeked
         public float $from,
         public float $to,
         public float $duration,
+        public ?array $metadata = null,
     ) {
     }
 }

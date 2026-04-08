@@ -45,6 +45,18 @@
             "description": "Set the audio volume (0.0 to 1.0)"
         },
         {
+            "name": "Audio.setPlaybackRate",
+            "android": "com.narraid.audio.AudioFunctions.SetPlaybackRate",
+            "ios": "AudioFunctions.SetPlaybackRate",
+            "description": "Set the playback speed (0.25 to 4.0, where 1.0 is normal speed)"
+        },
+        {
+            "name": "Audio.setProgressInterval",
+            "android": "com.narraid.audio.AudioFunctions.SetProgressInterval",
+            "ios": "AudioFunctions.SetProgressInterval",
+            "description": "Set how often PlaybackProgressUpdated events fire, in seconds (0.5 to 60)"
+        },
+        {
             "name": "Audio.getDuration",
             "android": "com.narraid.audio.AudioFunctions.GetDuration",
             "ios": "AudioFunctions.GetDuration",
@@ -60,7 +72,7 @@
             "name": "Audio.getState",
             "android": "com.narraid.audio.AudioFunctions.GetState",
             "ios": "AudioFunctions.GetState",
-            "description": "Get the full current playback state (url, position, duration, isPlaying, metadata) from the native audio layer"
+            "description": "Get the full current playback state (url, position, duration, isPlaying, playbackRate, playlist info, metadata)"
         },
         {
             "name": "Audio.setMetadata",
@@ -73,6 +85,66 @@
             "android": "com.narraid.audio.AudioFunctions.DrainEvents",
             "ios": "AudioFunctions.DrainEvents",
             "description": "Return and clear all events queued while the app was in the background"
+        },
+        {
+            "name": "Audio.setPlaylist",
+            "android": "com.narraid.audio.AudioFunctions.SetPlaylist",
+            "ios": "AudioFunctions.SetPlaylist",
+            "description": "Set the playlist queue natively so tracks auto-advance in the background"
+        },
+        {
+            "name": "Audio.nextTrack",
+            "android": "com.narraid.audio.AudioFunctions.NextTrack",
+            "ios": "AudioFunctions.NextTrack",
+            "description": "Skip to the next track in the active playlist"
+        },
+        {
+            "name": "Audio.previousTrack",
+            "android": "com.narraid.audio.AudioFunctions.PreviousTrack",
+            "ios": "AudioFunctions.PreviousTrack",
+            "description": "Skip to the previous track in the active playlist"
+        },
+        {
+            "name": "Audio.getPlaylist",
+            "android": "com.narraid.audio.AudioFunctions.GetPlaylist",
+            "ios": "AudioFunctions.GetPlaylist",
+            "description": "Get the current playlist state (items, index, total, repeatMode, shuffleMode)"
+        },
+        {
+            "name": "Audio.setRepeatMode",
+            "android": "com.narraid.audio.AudioFunctions.SetRepeatMode",
+            "ios": "AudioFunctions.SetRepeatMode",
+            "description": "Set the repeat mode: none, one (repeat current track), all (repeat playlist)"
+        },
+        {
+            "name": "Audio.setShuffleMode",
+            "android": "com.narraid.audio.AudioFunctions.SetShuffleMode",
+            "ios": "AudioFunctions.SetShuffleMode",
+            "description": "Enable or disable shuffle mode for the active playlist"
+        },
+        {
+            "name": "Audio.setSleepTimer",
+            "android": "com.narraid.audio.AudioFunctions.SetSleepTimer",
+            "ios": "AudioFunctions.SetSleepTimer",
+            "description": "Schedule playback to stop after the given number of minutes"
+        },
+        {
+            "name": "Audio.cancelSleepTimer",
+            "android": "com.narraid.audio.AudioFunctions.CancelSleepTimer",
+            "ios": "AudioFunctions.CancelSleepTimer",
+            "description": "Cancel an active sleep timer before it fires"
+        },
+        {
+            "name": "Audio.appendTrack",
+            "android": "com.narraid.audio.AudioFunctions.AppendTrack",
+            "ios": "AudioFunctions.AppendTrack",
+            "description": "Append a track to the end of the active playlist"
+        },
+        {
+            "name": "Audio.removeTrack",
+            "android": "com.narraid.audio.AudioFunctions.RemoveTrack",
+            "ios": "AudioFunctions.RemoveTrack",
+            "description": "Remove a track from the active playlist by zero-based index"
         }
     ],
 
@@ -126,6 +198,8 @@
         "Narraid\\Audio\\Events\\PlaybackSeeked",
         "Narraid\\Audio\\Events\\PlaybackFailed",
         "Narraid\\Audio\\Events\\PlaybackProgressUpdated",
+        "Narraid\\Audio\\Events\\PlaybackBuffering",
+        "Narraid\\Audio\\Events\\PlaybackReady",
         "Narraid\\Audio\\Events\\RemotePlayReceived",
         "Narraid\\Audio\\Events\\RemotePauseReceived",
         "Narraid\\Audio\\Events\\RemoteNextTrackReceived",
@@ -135,7 +209,13 @@
         "Narraid\\Audio\\Events\\AudioFocusLost",
         "Narraid\\Audio\\Events\\AudioFocusLostTransient",
         "Narraid\\Audio\\Events\\AudioFocusDucked",
-        "Narraid\\Audio\\Events\\AudioFocusGained"
+        "Narraid\\Audio\\Events\\AudioFocusGained",
+        "Narraid\\Audio\\Events\\PlaylistSet",
+        "Narraid\\Audio\\Events\\PlaylistTrackChanged",
+        "Narraid\\Audio\\Events\\PlaylistEnded",
+        "Narraid\\Audio\\Events\\PlaylistRepeatModeChanged",
+        "Narraid\\Audio\\Events\\PlaylistShuffleChanged",
+        "Narraid\\Audio\\Events\\SleepTimerExpired"
     ],
 
     "hooks": {}

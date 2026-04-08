@@ -5,11 +5,13 @@ namespace Narraid\Audio\Events;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class PlaybackLoaded
+class PlaylistTrackChanged
 {
     use Dispatchable, SerializesModels;
 
     public function __construct(
+        public int $index,
+        public int $total,
         public string $url,
         public ?string $title = null,
         public ?string $artist = null,
