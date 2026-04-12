@@ -422,7 +422,7 @@ class AudioFunctions {
         private fun effectiveTrackIndex(logicalIndex: Int): Int =
             if (shuffledOrder.isNotEmpty()) shuffledOrder.getOrNull(logicalIndex) ?: logicalIndex else logicalIndex
 
-        internal fun playTrackAt(index: Int, seekToSeconds: Double = 0.0, reason: String = "auto_advance") {
+        internal fun playTrackAt(index: Int, seekToSeconds: Double = 0.0, reason: String = "auto_advance", afterStarted: (() -> Unit)? = null) {
             if (index < 0 || index >= playlist.size) return
 
             // Resolve a live context — prefer the current activity, fall back to appContext.
@@ -753,6 +753,7 @@ class AudioFunctions {
 
     class Pause(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            if (mediaPlayer?.isPlaying != true) return mapOf("success" to true)
             mediaPlayer?.pause()
             stopProgressTimer()
             updateSessionState()
@@ -796,7 +797,6 @@ class AudioFunctions {
             val params   = JSONObject(parameters)
             val seconds  = maxOf(0.0, params.optDouble("seconds", 0.0))
             val from     = positionSeconds()
-            val duration = durationSeconds()
             mediaPlayer?.seekTo((seconds * 1000).toInt())
             updateSessionState()
             startProgressTimer(preferredProgressIntervalMs)
@@ -847,29 +847,20 @@ class AudioFunctions {
     }
 
     class GetState(private val context: Context) : BridgeFunction {
-        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val state = mutableMapOf<String, Any>(
-                "url"           to currentUrl,
-                "position"      to positionSeconds(),
-                "duration"      to durationSeconds(),
-                "isPlaying"     to (mediaPlayer?.isPlaying == true),
-                "isBuffering"   to isBuffering,
-                "hasPlayer"     to (mediaPlayer != null),
-                "playbackRate"  to playbackRate,
-                "hasPlaylist"   to playlist.isNotEmpty(),
-                "playlistIndex" to playlistIndex,
-                "playlistTotal" to playlist.size,
-                "repeatMode"    to repeatMode,
-                "shuffleMode"   to shuffleMode,
-            )
-            metaTitle?.let         { state["title"]    = it }
-            metaArtist?.let        { state["artist"]   = it }
-            metaAlbum?.let         { state["album"]    = it }
-            metaDurationMs?.let    { state["duration"] = it / 1000.0 }
-            metaArtworkSource?.let { state["artwork"]  = it }
-            metaMetadata?.let      { state["metadata"] = it }
-            return state
-        }
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> = mapOf(
+            "track"         to trackPayload(),
+            "position"      to positionSeconds(),
+            "duration"      to durationSeconds(),
+            "isPlaying"     to (mediaPlayer?.isPlaying == true),
+            "isBuffering"   to isBuffering,
+            "hasPlayer"     to (mediaPlayer != null),
+            "playbackRate"  to playbackRate,
+            "hasPlaylist"   to playlist.isNotEmpty(),
+            "playlistIndex" to playlistIndex,
+            "playlistTotal" to playlist.size,
+            "repeatMode"    to repeatMode,
+            "shuffleMode"   to shuffleMode,
+        )
     }
 
     class DrainEvents(private val activity: FragmentActivity) : BridgeFunction {
@@ -992,7 +983,7 @@ class AudioFunctions {
                 ?: return mapOf("success" to false, "error" to "Missing index")
             if (index < 0 || index >= playlist.size)
                 return mapOf("success" to false, "error" to "Index out of range")
-            return mapOf("success" to true, "track" to playlist[index])
+            return mapOf("success" to true, "track" to playlist[effectiveTrackIndex(index)])
         }
     }
 
@@ -1000,7 +991,7 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             if (playlistIndex < 0 || playlistIndex >= playlist.size)
                 return mapOf("success" to true, "track" to null)
-            return mapOf("success" to true, "track" to playlist[playlistIndex])
+            return mapOf("success" to true, "track" to playlist[effectiveTrackIndex(playlistIndex)])
         }
     }
 

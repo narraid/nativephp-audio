@@ -286,9 +286,12 @@ class Audio
      * Get the full current playback state from the native audio layer.
      *
      * Returns an associative array with keys:
-     *   url, position, duration, isPlaying, isBuffering, hasPlayer, playbackRate,
-     *   hasPlaylist, playlistIndex, playlistTotal, repeatMode, shuffleMode,
-     *   title, artist, album, artwork, metadata
+     *   track (url, title, artist, album, artwork, clip, duration, metadata),
+     *   position, duration, isPlaying, isBuffering, hasPlayer, playbackRate,
+     *   hasPlaylist, playlistIndex, playlistTotal, repeatMode, shuffleMode
+     *
+     * Note: track.duration is the metadata hint passed at load time.
+     *       The root duration key is the actual player-reported duration in seconds.
      *
      * Returns null when not running inside a NativePHP app or the call fails.
      */

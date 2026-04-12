@@ -657,6 +657,9 @@ enum AudioFunctions {
 
     class Pause: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard AudioFunctions.player != nil, AudioFunctions.player?.rate ?? 0 > 0 else {
+                return BridgeResponse.success(data: ["success": true])
+            }
             AudioFunctions.player?.pause()
             AudioFunctions.stopProgressTimer()
             AudioFunctions.syncNowPlayingState()
@@ -697,7 +700,6 @@ enum AudioFunctions {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let seconds  = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
             let from     = AudioFunctions.positionSeconds()
-            let duration = AudioFunctions.durationSeconds()
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
                 AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
                 AudioFunctions.syncNowPlayingState()
@@ -758,8 +760,8 @@ enum AudioFunctions {
 
     class GetState: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            var state: [String: Any] = [
-                "url":           AudioFunctions.currentURL,
+            return BridgeResponse.success(data: [
+                "track":         AudioFunctions.trackPayload(),
                 "position":      AudioFunctions.positionSeconds(),
                 "duration":      AudioFunctions.durationSeconds(),
                 "isPlaying":     AudioFunctions.player?.rate ?? 0 > 0,
@@ -771,15 +773,7 @@ enum AudioFunctions {
                 "playlistTotal": AudioFunctions.playlist.count,
                 "repeatMode":    AudioFunctions.repeatMode,
                 "shuffleMode":   AudioFunctions.shuffleMode,
-            ]
-            if let t = AudioFunctions.metaTitle         { state["title"]    = t }
-            if let a = AudioFunctions.metaArtist        { state["artist"]   = a }
-            if let a = AudioFunctions.metaAlbum         { state["album"]    = a }
-            if let d = AudioFunctions.metaDuration      { state["duration"] = d }
-            if let w = AudioFunctions.metaArtworkSource { state["artwork"]  = w }
-            if let m = AudioFunctions.metaMetadata      { state["metadata"] = m }
-
-            return BridgeResponse.success(data: state)
+            ])
         }
     }
 
@@ -904,7 +898,7 @@ enum AudioFunctions {
             guard index >= 0 && index < AudioFunctions.playlist.count else {
                 return BridgeResponse.error(code: "OUT_OF_RANGE", message: "Index out of range.")
             }
-            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[index]])
+            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: index)]])
         }
     }
 
@@ -914,7 +908,7 @@ enum AudioFunctions {
             guard idx >= 0 && idx < AudioFunctions.playlist.count else {
                 return BridgeResponse.success(data: ["track": NSNull()])
             }
-            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[idx]])
+            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: idx)]])
         }
     }
 

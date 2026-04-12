@@ -871,3 +871,107 @@ src/Audio.php
 
 Kotlin (GetTrack, GetActiveTrack, GetActiveTrackIndex) and Swift (GetTrack, GetActiveTrack, GetActiveTrackIndex) — all added before GetPlaylist, with consistent null handling (null /   
 NSNull() when playlistIndex is -1 or out of range).                      
+
+
+ ---                                                                                                           
+Plugin Consistency Report
+
+1. GetActiveTrack — shuffle-awareness bug (both platforms)
+
+GetActiveTrack returns playlist[playlistIndex] (physical index), but when shuffle is enabled the actual playing track is at playlist[effectiveTrackIndex(playlistIndex)] /               
+playlist[effectivePlaylistIndex(for: playlistIndex)].
+
+Impact: getActiveTrack() returns the wrong track whenever shuffle is on.                                                                                                                 
+Same bug on both Kotlin and Swift.
+                                                                                                                                                                                           
+---                                                       
+2. GetTrack(index) + getActiveTrackIndex() — shuffle mismatch
+
+GetActiveTrackIndex returns the logical playlistIndex (e.g. 2). GetTrack(2) returns playlist[2] (physical position 2). When shuffled, these two don't round-trip correctly —
+getTrack(getActiveTrackIndex()) gives you the wrong track. The only safe way to get the active track is getActiveTrack().
+
+This is a usability trap: the index returned by getActiveTrackIndex() cannot be safely passed back to getTrack() when shuffle is enabled.
+                                                            
+---                                                                                                                                                                                      
+3. PlaybackLoaded fires at different times on iOS vs Android
+
+- Android: PlaybackLoaded fires inside onPreparedListener — after prepareAsync() completes, meaning the player is actually ready to play.
+- iOS: PlaybackLoaded fires synchronously and immediately in the Load bridge function, before the player has buffered anything.
+
+Impact: A PHP listener on PlaybackLoaded cannot assume the track is ready to resume() on iOS — on Android it can.
+                                                                                                                                                                                           
+---                                                                                                                                                                                      
+4. GetState uses a flat structure; all events use a nested track object
+
+getState() returns: url, title, artist, album, artwork, metadata, position, duration, isPlaying, … all at the root level.
+
+All events carry: track: {url, title, artist, …}, position, isPlaying, isBuffering.
+
+A developer mapping event payloads to state will find track.title vs root-level title inconsistent. The PHP docblock for getState() documents the flat shape, but it doesn't match the   
+event shape.
+                                                                                                                                                                                           
+---                                                       
+5. AudioFocusDucked and AudioFocusLost are Android-only events
+
+- Android: fires AudioFocusLost (permanent loss) and AudioFocusDucked (ducked volume).
+- iOS: interruptions always map to AudioFocusLostTransient + PlaybackPaused. There is no duck handling and no permanent focus loss event.
+
+The PHP event classes AudioFocusDucked and AudioFocusLost exist and look symmetrical, but will never dispatch on iOS. No documentation or comment notes this.
+                                                                                                                                                                                           
+---                                                                                                                                                                                      
+6. Pause bridge fires PlaybackPaused regardless of player state (both platforms)
+
+Both Pause classes unconditionally call mediaPlayer?.pause() / player?.pause() and then fire PlaybackPaused — even if nothing is currently playing. This results in a spurious event with
+a potentially empty/zero-position state payload when called while stopped.
+                                                            
+---                                                                                                                                                                                      
+7. Unused duration variable in Seek (both platforms)
+
+In the Kotlin Seek class (line ~799) and Swift Seek class (line ~700), val duration = durationSeconds() / let duration = AudioFunctions.durationSeconds() is computed but never used —
+it's not included in the event payload or the return value.
+   
+---                                                                                                                                                                                      
+8. RemoteNextTrackReceived / RemotePreviousTrackReceived — payload reflects old state on Android
+
+In Android's MediaSession callbacks (onSkipToNext, onSkipToPrevious), playTrackAt is called then sendEvent("RemoteNextTrackReceived", statePayload()) fires immediately. Because
+playTrackAt dispatches MediaPlayer setup via Handler.post {}, at the moment the Remote event fires isPlaying is still false and the position is 0 from the old player. The track metadata
+fields (url, title, etc.) are correctly updated since those are synchronous. On iOS this is fine because preparePlayer is synchronous.
+                                                                                                                                                                                           
+---                                                       
+9. PlaylistTrackChanged is not fired for single-track play() / load()
+
+When Audio::play() or Audio::load() is called, both platforms do playlist.clear(); playlistIndex = -1, then play a single URL. No PlaylistTrackChanged event fires — only
+PlaybackStarted. A developer who exclusively listens to PlaylistTrackChanged to track "what's playing" will miss single-track plays entirely.
+                                                            
+---                                                                                                                                                                                      
+10. PlaylistSet event only carries total — no track info
+
+PlaylistSet fires with just {"total": N}. All other playlist events carry the active track, index, reason, etc. A listener on PlaylistSet has no way to know which track is about to
+start or what was playing before without calling getState().
+                                                            
+---                                                                                                                                                                                      
+Summary table
+
+┌─────┬───────────────────────────────────────────────────────┬──────────────────────────┬────────────────┐
+│  #  │                         Issue                         │         Severity         │   Platforms    │                                                                              
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 1   │ GetActiveTrack ignores shuffle                        │ Bug                      │ Both           │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 2   │ getTrack(getActiveTrackIndex()) wrong when shuffled   │ Usability trap           │ Both           │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 3x   │ PlaybackLoaded timing differs                         │ Behavioral inconsistency │ iOS vs Android │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 4   │ getState() flat vs event nested track                 │ API shape inconsistency  │ Both           │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 5x   │ AudioFocusDucked/AudioFocusLost iOS-only gap          │ Undocumented             │ iOS only       │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 6   │ Pause fires event when nothing is playing             │ Minor bug                │ Both           │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 7   │ Unused duration in Seek                               │ Code smell               │ Both           │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 8   │ Remote events fire with stale isPlaying on Android    │ Minor inconsistency      │ Android only   │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 9   │ Single-track play()/load() skips PlaylistTrackChanged │ Design gap               │ Both           │
+├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
+│ 10  │ PlaylistSet carries no track context                  │ Minimal event            │ Both           │
+└─────┴───────────────────────────────────────────────────────┴──────────────────────────┴────────────────┘         
