@@ -73,23 +73,25 @@ enum AudioFunctions {
         LaravelBridge.shared.send?(eventPrefix + name, payload)
     }
 
-    private static func withMeta(_ base: [String: Any]) -> [String: Any] {
-        guard let m = metaMetadata else { return base }
-        var copy = base
-        copy["metadata"] = m
-        return copy
+    private static func trackPayload() -> [String: Any] {
+        var t: [String: Any] = ["url": currentURL]
+        if let title    = metaTitle         { t["title"]    = title }
+        if let artist   = metaArtist        { t["artist"]   = artist }
+        if let album    = metaAlbum         { t["album"]    = album }
+        if let d        = metaDuration      { t["duration"] = d }
+        if let artwork  = metaArtworkSource { t["artwork"]  = artwork }
+        if let clip     = metaClip          { t["clip"]     = clip }
+        if let metadata = metaMetadata      { t["metadata"] = metadata }
+        return t
     }
 
     private static func statePayload() -> [String: Any] {
-        var p: [String: Any] = [
+        [
+            "track":       trackPayload(),
             "position":    positionSeconds(),
-            "duration":    durationSeconds(),
-            "url":         currentURL,
             "isPlaying":   player?.rate ?? 0 > 0,
             "isBuffering": isBuffering,
         ]
-        if let m = metaMetadata { p["metadata"] = m }
-        return p
     }
 
     // MARK: - Position / Duration
@@ -240,6 +242,12 @@ enum AudioFunctions {
 
     private static func playTrackAt(index: Int, seekTo: Double = 0) {
         guard index >= 0, index < playlist.count else { return }
+
+        // Capture previous state before overwriting playlistIndex.
+        let prevIndex: Int?           = playlistIndex >= 0 ? playlistIndex : nil
+        let prevPosition: Double      = positionSeconds()
+        let prevTrack: [String: Any]? = prevIndex.map { playlist[effectivePlaylistIndex(for: $0)] }
+
         playlistIndex = index
         let track = playlist[effectivePlaylistIndex(for: index)]
 
@@ -262,25 +270,14 @@ enum AudioFunctions {
         syncNowPlayingState()
         startProgressTimer(interval: progressInterval)
 
-        var trackChangedPayload: [String: Any] = ["index": index, "total": playlist.count, "url": urlString]
-        if let t = title    { trackChangedPayload["title"]    = t }
-        if let a = artist   { trackChangedPayload["artist"]   = a }
-        if let a = album    { trackChangedPayload["album"]    = a }
-        if let d = duration { trackChangedPayload["duration"] = d }
-        if let w = artwork  { trackChangedPayload["artwork"]  = w }
-        if let c = clip     { trackChangedPayload["clip"]     = c }
-        if let m = metadata { trackChangedPayload["metadata"] = m }
+        var trackChangedPayload: [String: Any] = ["index": index, "track": trackPayload()]
+        if let pi = prevIndex {
+            trackChangedPayload["lastIndex"]    = pi
+            trackChangedPayload["lastPosition"] = prevPosition
+        }
+        if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
         sendEvent("PlaylistTrackChanged", trackChangedPayload)
-
-        var startedPayload: [String: Any] = ["url": urlString, "position": seekTo]
-        if let t = title    { startedPayload["title"]    = t }
-        if let a = artist   { startedPayload["artist"]   = a }
-        if let a = album    { startedPayload["album"]    = a }
-        if let d = duration { startedPayload["duration"] = d }
-        if let w = artwork  { startedPayload["artwork"]  = w }
-        if let c = clip     { startedPayload["clip"]     = c }
-        if let m = metadata { startedPayload["metadata"] = m }
-        sendEvent("PlaybackStarted", startedPayload)
+        sendEvent("PlaybackStarted", ["track": trackPayload(), "position": seekTo])
     }
 
     private static func advancePlaylist() {
@@ -295,7 +292,15 @@ enum AudioFunctions {
             if next < playlist.count {
                 playTrackAt(index: next)
             } else {
-                sendEvent("PlaylistEnded", ["total": playlist.count])
+                var endedPayload: [String: Any] = [:]
+                if playlistIndex >= 0 {
+                    endedPayload["lastIndex"]    = playlistIndex
+                    endedPayload["lastPosition"] = positionSeconds()
+                    if playlistIndex < playlist.count {
+                        endedPayload["lastTrack"] = playlist[effectivePlaylistIndex(for: playlistIndex)]
+                    }
+                }
+                sendEvent("PlaylistEnded", endedPayload)
             }
         }
     }
@@ -427,9 +432,9 @@ enum AudioFunctions {
             let duration = durationSeconds()
             player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) { _ in
                 syncNowPlayingState()
-                sendEvent("RemoteSeekReceived", withMeta([
-                    "position": from, "duration": duration, "url": currentURL, "seekTo": seekTo
-                ]))
+                sendEvent("RemoteSeekReceived", [
+                    "track": trackPayload(), "position": from, "seekTo": seekTo
+                ])
             }
             return .success
         }
@@ -557,17 +562,15 @@ enum AudioFunctions {
         bufferingObservation = playerItem?.observe(\.isPlaybackBufferEmpty, options: [.new]) { item, _ in
             guard item.isPlaybackBufferEmpty else { return }
             AudioFunctions.isBuffering = true
-            AudioFunctions.sendEvent("PlaybackBuffering", AudioFunctions.withMeta([
-                "url": urlString, "position": AudioFunctions.positionSeconds()
-            ]))
+            AudioFunctions.sendEvent("PlaybackBuffering", [
+                "track": AudioFunctions.trackPayload(), "position": AudioFunctions.positionSeconds()
+            ])
         }
 
         readyObservation = playerItem?.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { item, _ in
             guard item.isPlaybackLikelyToKeepUp else { return }
             AudioFunctions.isBuffering = false
-            AudioFunctions.sendEvent("PlaybackReady", AudioFunctions.withMeta([
-                "url": urlString, "duration": AudioFunctions.durationSeconds()
-            ]))
+            AudioFunctions.sendEvent("PlaybackReady", ["track": AudioFunctions.trackPayload()])
         }
 
         completionObserver = NotificationCenter.default.addObserver(
@@ -575,7 +578,7 @@ enum AudioFunctions {
             object: playerItem, queue: .main
         ) { _ in
             stopProgressTimer()
-            sendEvent("PlaybackCompleted", withMeta(["url": urlString, "duration": durationSeconds()]))
+            sendEvent("PlaybackCompleted", ["track": trackPayload()])
             advancePlaylist()
         }
 
@@ -586,7 +589,7 @@ enum AudioFunctions {
             stopProgressTimer()
             let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
                 .localizedDescription ?? "Unknown error"
-            sendEvent("PlaybackFailed", withMeta(["url": urlString, "error": error]))
+            sendEvent("PlaybackFailed", ["track": trackPayload(), "error": error])
         }
     }
 
@@ -614,15 +617,7 @@ enum AudioFunctions {
                                          album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
             AudioFunctions.syncNowPlayingState()
 
-            var loadedPayload: [String: Any] = ["url": urlString]
-            if let t = title    { loadedPayload["title"]    = t }
-            if let a = artist   { loadedPayload["artist"]   = a }
-            if let a = album    { loadedPayload["album"]    = a }
-            if let d = duration { loadedPayload["duration"] = d }
-            if let w = artwork  { loadedPayload["artwork"]  = w }
-            if let c = clip     { loadedPayload["clip"]     = c }
-            if let m = metadata { loadedPayload["metadata"] = m }
-            AudioFunctions.sendEvent("PlaybackLoaded", loadedPayload)
+            AudioFunctions.sendEvent("PlaybackLoaded", ["track": AudioFunctions.trackPayload()])
 
             return BridgeResponse.success(data: ["success": true])
         }
@@ -654,15 +649,7 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
 
-            var startedPayload: [String: Any] = ["url": urlString, "position": 0.0]
-            if let t = title    { startedPayload["title"]    = t }
-            if let a = artist   { startedPayload["artist"]   = a }
-            if let a = album    { startedPayload["album"]    = a }
-            if let d = duration { startedPayload["duration"] = d }
-            if let w = artwork  { startedPayload["artwork"]  = w }
-            if let c = clip     { startedPayload["clip"]     = c }
-            if let m = metadata { startedPayload["metadata"] = m }
-            AudioFunctions.sendEvent("PlaybackStarted", startedPayload)
+            AudioFunctions.sendEvent("PlaybackStarted", ["track": AudioFunctions.trackPayload(), "position": 0.0])
 
             return BridgeResponse.success(data: ["success": true])
         }
@@ -714,9 +701,9 @@ enum AudioFunctions {
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
                 AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
                 AudioFunctions.syncNowPlayingState()
-                AudioFunctions.sendEvent("PlaybackSeeked", AudioFunctions.withMeta([
-                    "from": from, "to": seconds, "duration": duration, "url": AudioFunctions.currentURL
-                ]))
+                AudioFunctions.sendEvent("PlaybackSeeked", [
+                    "track": AudioFunctions.trackPayload(), "from": from, "to": seconds
+                ])
             }
             return BridgeResponse.success(data: ["success": true])
         }

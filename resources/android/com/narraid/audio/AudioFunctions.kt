@@ -116,17 +116,24 @@ class AudioFunctions {
             }
         }
 
-        private fun statePayload(): Map<String, Any> {
-            val m = mutableMapOf<String, Any>(
-                "position"    to positionSeconds(),
-                "duration"    to durationSeconds(),
-                "url"         to currentUrl,
-                "isPlaying"   to (mediaPlayer?.isPlaying == true),
-                "isBuffering" to isBuffering,
-            )
-            metaMetadata?.let { m["metadata"] = it }
+        private fun trackPayload(): Map<String, Any> {
+            val m = mutableMapOf<String, Any>("url" to currentUrl)
+            metaTitle?.let         { m["title"]    = it }
+            metaArtist?.let        { m["artist"]   = it }
+            metaAlbum?.let         { m["album"]    = it }
+            metaDurationMs?.let    { m["duration"] = it / 1000.0 }
+            metaArtworkSource?.let { m["artwork"]  = it }
+            metaClip?.let          { m["clip"]     = it }
+            metaMetadata?.let      { m["metadata"] = it }
             return m
         }
+
+        private fun statePayload(): Map<String, Any> = mapOf(
+            "track"       to trackPayload(),
+            "position"    to positionSeconds(),
+            "isPlaying"   to (mediaPlayer?.isPlaying == true),
+            "isBuffering" to isBuffering,
+        )
 
         // ── Position / Duration ───────────────────────────────────────────────
 
@@ -231,9 +238,8 @@ class AudioFunctions {
                         mediaPlayer?.seekTo(pos.toInt())
                         updateSessionState()
                         sendEvent("RemoteSeekReceived", mapOf(
-                            "position" to from, "duration" to durationSeconds(),
-                            "url" to currentUrl, "seekTo" to pos / 1000.0
-                        ) + metaPayload())
+                            "track" to trackPayload(), "position" to from, "seekTo" to pos / 1000.0
+                        ))
                     }
 
                     override fun onStop() {
@@ -423,6 +429,14 @@ class AudioFunctions {
             val context: Context = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
                 ?: appContext ?: return
 
+            // Capture previous state before overwriting playlistIndex.
+            val prevIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
+            val prevPosition: Double = positionSeconds()
+            @Suppress("UNCHECKED_CAST")
+            val prevTrack: Map<String, Any>? = prevIndex
+                ?.takeIf { it < playlist.size }
+                ?.let { playlist[effectiveTrackIndex(it)] as? Map<String, Any> }
+
             playlistIndex = index
             val track    = playlist[effectiveTrackIndex(index)]
             val url      = track["url"] as? String ?: return
@@ -484,33 +498,22 @@ class AudioFunctions {
                             AudioService.start(ctx, metaTitle ?: "Now Playing", metaArtist)
 
                             val trackChangedPayload = mutableMapOf<String, Any>(
-                                "index" to index, "total" to playlist.size, "url" to url
+                                "index" to index, "track" to trackPayload()
                             )
-                            title?.let    { trackChangedPayload["title"]    = it }
-                            artist?.let   { trackChangedPayload["artist"]   = it }
-                            album?.let    { trackChangedPayload["album"]    = it }
-                            duration?.let { trackChangedPayload["duration"] = it }
-                            artwork?.let  { trackChangedPayload["artwork"]  = it }
-                            clip?.let     { trackChangedPayload["clip"]     = it }
-                            metadata?.let { trackChangedPayload["metadata"] = it }
+                            prevIndex?.let {
+                                trackChangedPayload["lastIndex"]    = it
+                                trackChangedPayload["lastPosition"] = prevPosition
+                            }
+                            prevTrack?.let { trackChangedPayload["lastTrack"] = it }
                             sendEvent("PlaylistTrackChanged", trackChangedPayload)
-
-                            val startedPayload = mutableMapOf<String, Any>("url" to url, "position" to seekToSeconds)
-                            title?.let    { startedPayload["title"]    = it }
-                            artist?.let   { startedPayload["artist"]   = it }
-                            album?.let    { startedPayload["album"]    = it }
-                            duration?.let { startedPayload["duration"] = it }
-                            artwork?.let  { startedPayload["artwork"]  = it }
-                            clip?.let     { startedPayload["clip"]     = it }
-                            metadata?.let { startedPayload["metadata"] = it }
-                            sendEvent("PlaybackStarted", startedPayload)
+                            sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to seekToSeconds))
                         }
 
                         attachCommonListeners(this)
                         prepareAsync()
                     }
                 } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")) + metaPayload())
+                    sendEvent("PlaybackFailed", mapOf("track" to trackPayload(), "error" to (e.message ?: "Unknown error")))
                 }
             }
         }
@@ -525,7 +528,15 @@ class AudioFunctions {
                     if (next < playlist.size) {
                         playTrackAt(next)
                     } else {
-                        sendEvent("PlaylistEnded", mapOf("total" to playlist.size))
+                        val endedPayload = mutableMapOf<String, Any>()
+                        if (playlistIndex >= 0) {
+                            endedPayload["lastIndex"]    = playlistIndex
+                            endedPayload["lastPosition"] = positionSeconds()
+                            @Suppress("UNCHECKED_CAST")
+                            (playlist.getOrNull(effectiveTrackIndex(playlistIndex)) as? Map<String, Any>)
+                                ?.let { endedPayload["lastTrack"] = it }
+                        }
+                        sendEvent("PlaylistEnded", endedPayload)
                     }
                 }
             }
@@ -555,19 +566,16 @@ class AudioFunctions {
             sleepTimerRunnable = null
         }
 
-        private fun metaPayload(): Map<String, Any> =
-            metaMetadata?.let { mapOf("metadata" to it) } ?: emptyMap()
-
         private fun attachCommonListeners(mp: MediaPlayer) {
             mp.setOnInfoListener { _, what, _ ->
                 when (what) {
                     MediaPlayer.MEDIA_INFO_BUFFERING_START -> {
                         isBuffering = true
-                        sendEvent("PlaybackBuffering", mapOf("url" to currentUrl, "position" to positionSeconds()) + metaPayload())
+                        sendEvent("PlaybackBuffering", mapOf("track" to trackPayload(), "position" to positionSeconds()))
                     }
                     MediaPlayer.MEDIA_INFO_BUFFERING_END -> {
                         isBuffering = false
-                        sendEvent("PlaybackReady", mapOf("url" to currentUrl, "duration" to durationSeconds()) + metaPayload())
+                        sendEvent("PlaybackReady", mapOf("track" to trackPayload()))
                     }
                 }
                 false
@@ -575,15 +583,15 @@ class AudioFunctions {
             mp.setOnCompletionListener {
                 isBuffering = false
                 stopProgressTimer()
-                sendEvent("PlaybackCompleted", mapOf("url" to currentUrl, "duration" to durationSeconds()) + metaPayload())
+                sendEvent("PlaybackCompleted", mapOf("track" to trackPayload()))
                 advancePlaylist()
             }
             mp.setOnErrorListener { _, what, extra ->
                 isBuffering = false
                 stopProgressTimer()
                 sendEvent("PlaybackFailed", mapOf(
-                    "url" to currentUrl, "error" to "MediaPlayer error: what=$what extra=$extra"
-                ) + metaPayload())
+                    "track" to trackPayload(), "error" to "MediaPlayer error: what=$what extra=$extra"
+                ))
                 false
             }
         }
@@ -656,21 +664,13 @@ class AudioFunctions {
 
                         setOnPreparedListener { _ ->
                             updateSessionState()
-                            val payload = mutableMapOf<String, Any>("url" to url)
-                            title?.let    { payload["title"]    = it }
-                            artist?.let   { payload["artist"]   = it }
-                            album?.let    { payload["album"]    = it }
-                            duration?.let { payload["duration"] = it }
-                            artwork?.let  { payload["artwork"]  = it }
-                            clip?.let     { payload["clip"]     = it }
-                            metadata?.let { payload["metadata"] = it }
-                            sendEvent("PlaybackLoaded", payload)
+                            sendEvent("PlaybackLoaded", mapOf("track" to trackPayload()))
                         }
                         attachCommonListeners(this)
                         prepareAsync()
                     }
                 } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")) + metaPayload())
+                    sendEvent("PlaybackFailed", mapOf("track" to trackPayload(), "error" to (e.message ?: "Unknown error")))
                 }
             }
 
@@ -737,21 +737,13 @@ class AudioFunctions {
                             startProgressTimer(preferredProgressIntervalMs)
                             AudioService.start(activity, metaTitle ?: "Now Playing", metaArtist)
 
-                            val payload = mutableMapOf<String, Any>("url" to url, "position" to 0.0)
-                            title?.let    { payload["title"]    = it }
-                            artist?.let   { payload["artist"]   = it }
-                            album?.let    { payload["album"]    = it }
-                            duration?.let { payload["duration"] = it }
-                            artwork?.let  { payload["artwork"]  = it }
-                            clip?.let     { payload["clip"]     = it }
-                            metadata?.let { payload["metadata"] = it }
-                            sendEvent("PlaybackStarted", payload)
+                            sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to 0.0))
                         }
                         attachCommonListeners(this)
                         prepareAsync()
                     }
                 } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("url" to url, "error" to (e.message ?: "Unknown error")) + metaPayload())
+                    sendEvent("PlaybackFailed", mapOf("track" to trackPayload(), "error" to (e.message ?: "Unknown error")))
                 }
             }
 
@@ -808,9 +800,7 @@ class AudioFunctions {
             mediaPlayer?.seekTo((seconds * 1000).toInt())
             updateSessionState()
             startProgressTimer(preferredProgressIntervalMs)
-            sendEvent("PlaybackSeeked", mapOf(
-                "from" to from, "to" to seconds, "duration" to duration, "url" to currentUrl
-            ) + metaPayload())
+            sendEvent("PlaybackSeeked", mapOf("track" to trackPayload(), "from" to from, "to" to seconds))
             return mapOf("success" to true)
         }
     }

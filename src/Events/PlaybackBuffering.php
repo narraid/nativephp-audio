@@ -10,9 +10,8 @@ class PlaybackBuffering
     use Dispatchable, SerializesModels;
 
     public function __construct(
-        public string $url,
+        public array $track,
         public float $position,
-        public ?array $metadata = null,
     ) {
     }
 }

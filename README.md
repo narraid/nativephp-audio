@@ -705,3 +705,33 @@ Android (AudioFunctions.kt):
 - SetPlaylist.execute reads startSeconds and forwards it to playTrackAt
 
 All existing callers (advancePlaylist, NextTrack, PreviousTrack, Resume) use the default 0 so they're unaffected.     
+
+
+Here's a summary of all changes made:
+
+PHP Events (22 files updated):
+- PlaybackLoaded → array $track
+- PlaybackStarted → array $track, float $position = 0.0
+- PlaylistTrackChanged → int $index, int $total, array $track
+- 13 state-payload events (AudioFocusDucked/Gained/Lost/LostTransient, PlaybackPaused/ProgressUpdated/Resumed/Stopped, RemoteNext/Pause/Play/Previous/StopReceived) → array $track, float
+  $position, float $duration, bool $isBuffering, bool $isPlaying
+- PlaybackBuffering → array $track, float $position
+- PlaybackCompleted, PlaybackReady → array $track, float $duration
+- PlaybackFailed → array $track, string $error
+- PlaybackSeeked → array $track, float $from, float $to, float $duration
+- RemoteSeekReceived → array $track, float $position, float $duration, float $seekTo
+
+Android (AudioFunctions.kt):
+- Added trackPayload() helper that builds {url, title?, artist?, album?, duration?, artwork?, clip?, metadata?} from stored meta
+- Replaced statePayload() to emit {track, position, duration, isPlaying, isBuffering}
+- Removed metaPayload() — absorbed into trackPayload()
+- All event sends updated: PlaybackLoaded, PlaybackStarted, PlaylistTrackChanged, PlaybackSeeked, RemoteSeekReceived, and all withMeta(...) → trackPayload()
+
+iOS (AudioFunctions.swift):
+- Added trackPayload() helper — same structure
+- Replaced statePayload() with track-based version
+- Removed withMeta() helper — all calls replaced with ["track": trackPayload(), ...]
+- All event sends in preparePlayer, playTrackAt, Load.execute, Play.execute, Seek.execute, and remote command centre updated
+
+✻ Cogitated for 15m 57s                                                                                                                                                                    
+                          
