@@ -240,7 +240,7 @@ enum AudioFunctions {
         return shuffledOrder[logicalIndex]
     }
 
-    private static func playTrackAt(index: Int, seekTo: Double = 0) {
+    private static func playTrackAt(index: Int, seekTo: Double = 0, reason: String = "auto_advance") {
         guard index >= 0, index < playlist.count else { return }
 
         // Capture previous state before overwriting playlistIndex.
@@ -270,7 +270,7 @@ enum AudioFunctions {
         syncNowPlayingState()
         startProgressTimer(interval: progressInterval)
 
-        var trackChangedPayload: [String: Any] = ["index": index, "track": trackPayload()]
+        var trackChangedPayload: [String: Any] = ["index": index, "reason": reason, "track": trackPayload()]
         if let pi = prevIndex {
             trackChangedPayload["lastIndex"]    = pi
             trackChangedPayload["lastPosition"] = prevPosition
@@ -284,13 +284,13 @@ enum AudioFunctions {
         guard !playlist.isEmpty else { return }
         switch repeatMode {
         case "one":
-            playTrackAt(index: playlistIndex)
+            playTrackAt(index: playlistIndex, reason: "repeat")
         case "all":
-            playTrackAt(index: (playlistIndex + 1) % playlist.count)
+            playTrackAt(index: (playlistIndex + 1) % playlist.count, reason: "auto_advance")
         default:
             let next = playlistIndex + 1
             if next < playlist.count {
-                playTrackAt(index: next)
+                playTrackAt(index: next, reason: "auto_advance")
             } else {
                 var endedPayload: [String: Any] = [:]
                 if playlistIndex >= 0 {
@@ -407,7 +407,7 @@ enum AudioFunctions {
                 let nextIndex = repeatMode == "all"
                     ? (playlistIndex + 1) % playlist.count
                     : min(playlistIndex + 1, playlist.count - 1)
-                playTrackAt(index: nextIndex)
+                playTrackAt(index: nextIndex, reason: "user_next")
             }
             sendEvent("RemoteNextTrackReceived", statePayload())
             return .success
@@ -416,7 +416,7 @@ enum AudioFunctions {
         center.previousTrackCommand.isEnabled = true
         center.previousTrackCommand.addTarget { _ in
             if !playlist.isEmpty {
-                playTrackAt(index: max(0, playlistIndex - 1))
+                playTrackAt(index: max(0, playlistIndex - 1), reason: "user_previous")
             }
             sendEvent("RemotePreviousTrackReceived", statePayload())
             return .success
@@ -671,7 +671,7 @@ enum AudioFunctions {
             if AudioFunctions.player == nil && !AudioFunctions.playlist.isEmpty && AudioFunctions.playlistIndex >= 0 {
                 let seekTo = AudioFunctions.pendingSeekSeconds
                 AudioFunctions.pendingSeekSeconds = 0
-                AudioFunctions.playTrackAt(index: AudioFunctions.playlistIndex, seekTo: seekTo)
+                AudioFunctions.playTrackAt(index: AudioFunctions.playlistIndex, seekTo: seekTo, reason: "user_selected")
                 return BridgeResponse.success(data: ["success": true])
             }
             AudioFunctions.activateAudioSession()
@@ -844,7 +844,7 @@ enum AudioFunctions {
             AudioFunctions.sendEvent("PlaylistSet", ["total": items.count])
 
             if autoPlay {
-                AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds)
+                AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds, reason: "user_selected")
             } else {
                 AudioFunctions.playlistIndex    = startIndex
                 AudioFunctions.pendingSeekSeconds = startSeconds
@@ -862,7 +862,7 @@ enum AudioFunctions {
             let nextIndex = AudioFunctions.repeatMode == "all"
                 ? (AudioFunctions.playlistIndex + 1) % AudioFunctions.playlist.count
                 : min(AudioFunctions.playlistIndex + 1, AudioFunctions.playlist.count - 1)
-            AudioFunctions.playTrackAt(index: nextIndex)
+            AudioFunctions.playTrackAt(index: nextIndex, reason: "user_next")
             return BridgeResponse.success(data: ["success": true])
         }
     }
@@ -872,7 +872,7 @@ enum AudioFunctions {
             guard !AudioFunctions.playlist.isEmpty else {
                 return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
             }
-            AudioFunctions.playTrackAt(index: max(0, AudioFunctions.playlistIndex - 1))
+            AudioFunctions.playTrackAt(index: max(0, AudioFunctions.playlistIndex - 1), reason: "user_previous")
             return BridgeResponse.success(data: ["success": true])
         }
     }

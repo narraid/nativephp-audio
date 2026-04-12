@@ -379,19 +379,19 @@ class Audio
      * Each item in $items must have a 'url' key. Optional keys per item:
      *   title, artist, album, artwork, duration, clip, metadata
      *
-     * @param  array  $items        Array of track objects
-     * @param  bool   $autoPlay     Start playing immediately (default true)
-     * @param  int    $startIndex   Index of the track to start from (default 0)
-     * @param  int    $seconds      Position in seconds to seek to on the starting track (default 0)
+     * @param  array  $items         Array of track objects
+     * @param  bool   $autoPlay      Start playing immediately (default true)
+     * @param  int    $startIndex    Index of the track to start from (default 0)
+     * @param  float  $startSeconds  Position in seconds to seek to on the starting track (default 0)
      */
-    public function setPlaylist(array $items, bool $autoPlay = true, int $startIndex = 0, int $seconds = 0): bool
+    public function setPlaylist(array $items, bool $autoPlay = true, int $startIndex = 0, float $startSeconds = 0.0): bool
     {
         if (function_exists('nativephp_call')) {
             $result = nativephp_call('Audio.setPlaylist', json_encode([
                 'items'        => $items,
                 'autoPlay'     => $autoPlay,
                 'startIndex'   => $startIndex,
-                'startSeconds' => $seconds,
+                'startSeconds' => $startSeconds,
             ]));
 
             if ($result) {

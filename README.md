@@ -734,4 +734,113 @@ iOS (AudioFunctions.swift):
 - All event sends in preparePlayer, playTrackAt, Load.execute, Play.execute, Seek.execute, and remote command centre updated
 
 ✻ Cogitated for 15m 57s                                                                                                                                                                    
-                          
+
+
+
+Here's a thorough analysis:
+                                                                                          
+---                                                                                                                                                                                      
+What you can build
+
+Fully covered by current events
+
+Play counts & top tracks/artists/albums                                                                                                                                                  
+PlaybackStarted { track } fires on every play. You get track.url, track.title, track.artist, track.album — enough to count plays per track and rank by artist/album exactly like         
+Spotify's "Top Songs" and "Top Artists".
+
+Full completions vs skips                                                                                                                                                                
+PlaybackCompleted { track } = listened all the way through. Combined with PlaylistTrackChanged { lastPosition, lastTrack } you know exactly how many seconds into lastTrack the user was
+when they moved on. This gives you completion rate per track — Spotify's most important engagement signal.
+
+Skip direction                                                                                                                                                                           
+RemoteNextTrackReceived = user explicitly hit next. RemotePreviousTrackReceived = went back. These are unambiguous user-initiated skips. Combined with lastPosition you know "skipped at
+12s" vs "skipped at 2m30s".
+
+Seek behaviour                                                                                                                                                                           
+PlaybackSeeked { track, from, to } and RemoteSeekReceived { track, position, seekTo } tell you exactly what parts of a track users jump over or revisit — the equivalent of Spotify's  
+internal "skimming" signals.
+
+Listening sessions                                                                                                                                                                       
+Group by time gap between PlaybackStarted / PlaybackResumed and PlaybackPaused / PlaybackStopped. Each pair is a listening segment. Sum segments for total listen time per session.
+
+Listening time per track
+PlaybackStarted { position } + next PlaylistTrackChanged.lastPosition (or PlaybackStopped.position, or PlaybackCompleted) = actual seconds consumed per track. If progress events fire   
+every 10s as a heartbeat, you even survive app crashes between events.
+
+Repeat behaviour                                                                                                                                                                         
+Multiple PlaybackStarted on the same track.url within a session = replayed. PlaylistRepeatModeChanged tells you when the user switched to loop mode.
+
+Shuffle usage                                                                                                                                                                            
+PlaylistShuffleChanged { shuffle } logs when the user enabled/disabled shuffle. Combined with PlaylistSet you can see shuffle-on vs shuffle-off listening patterns.
+
+Interruptions & focus loss                                                                                                                                                               
+AudioFocusLost / AudioFocusLostTransient / AudioFocusDucked with position — you can see how often external interruptions (calls, notifications) break listening sessions.
+
+Sleep timer usage                                                                                                                                                                        
+SleepTimerExpired — counts and timing of sleep timer use.
+                                                                                                                                                                                           
+---
+One gap worth addressing
+
+You cannot distinguish auto-advance from a user-initiated skip in PlaylistTrackChanged.
+
+When the track finishes naturally, PlaybackCompleted fires first, then advancePlaylist() calls playTrackAt() which fires PlaylistTrackChanged. When the user taps Next,                  
+RemoteNextTrackReceived fires alongside PlaylistTrackChanged. So you can correlate them, but it requires joining two events by timestamp proximity — fragile.
+
+The clean fix is a reason field on PlaylistTrackChanged:
+
+public string $reason, // "auto_advance" | "user_next" | "user_previous" | "user_selected"
+
+On the native side you'd pass the reason into playTrackAt() and include it in the payload. This one field unlocks accurate skip-rate analytics — Spotify's most closely guarded metric.
+                                                                                                                                                                                           
+---                                                                                                                                                                                      
+What you'd store in the database
+
+Each event maps to a row in a listening_events table:
+
+┌──────────────────────────────────────────────────────┬──────────────────────────────────────────────────────────────────────┐                                                          
+│                        Column                        │                                Source                                │                                                          
+├──────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤                                                          
+│ user_id                                              │ your app context                                                     │                                                        
+├──────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤
+│ session_id                                           │ derived: new session after >30 min gap                               │
+├──────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤                                                          
+│ event                                                │ event class name                                                     │
+├──────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤                                                          
+│ track_url / track_title / track_artist / track_album │ $track fields                                                        │                                                        
+├──────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤                                                          
+│ position                                             │ $position where present                                              │
+├──────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤                                                          
+│ occurred_at                                          │ now() in the event listener                                          │                                                        
+├──────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────┤                                                          
+│ extra                                                │ JSON of remaining fields (from/to for seeks, reason for skips, etc.) │
+└──────────────────────────────────────────────────────┴──────────────────────────────────────────────────────────────────────┘
+
+From that table you can answer every question Spotify Wrapped answers.
+                                                                                                                                                                                         
+---                                                                                                                                                                                      
+Verdict
+
+The event set is sufficient to build Spotify-style statistics today. The one addition worth making is $reason on PlaylistTrackChanged — without it, skip-rate attribution requires
+timestamp correlation rather than a direct signal.            
+
+┌────────────────────────────────────┬─────────────────┐                                                                                                                                 
+│             Call site              │     Reason      │                                                                                                                                 
+├────────────────────────────────────┼─────────────────┤                                                                                                                                 
+│ advancePlaylist — repeat one       │ "repeat"        │                                                                                                                                 
+├────────────────────────────────────┼─────────────────┤                                                                                                                                 
+│ advancePlaylist — all / next       │ "auto_advance"  │                                                                                                                                 
+├────────────────────────────────────┼─────────────────┤
+│ onSkipToNext / remote next         │ "user_next"     │                                                                                                                                 
+├────────────────────────────────────┼─────────────────┤                                                                                                                                 
+│ onSkipToPrevious / remote previous │ "user_previous" │
+├────────────────────────────────────┼─────────────────┤                                                                                                                                 
+│ NextTrack bridge                   │ "user_next"     │                                                                                                                               
+├────────────────────────────────────┼─────────────────┤                                                                                                                                 
+│ PreviousTrack bridge               │ "user_previous" │
+├────────────────────────────────────┼─────────────────┤                                                                                                                                 
+│ SetPlaylist autoPlay               │ "user_selected" │                                                                                                                               
+├────────────────────────────────────┼─────────────────┤                                                                                                                                 
+│ Resume cold-start                  │ "user_selected" │
+└────────────────────────────────────┴─────────────────┘
+

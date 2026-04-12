@@ -221,14 +221,14 @@ class AudioFunctions {
                                 (playlistIndex + 1) % playlist.size
                             else
                                 minOf(playlistIndex + 1, playlist.size - 1)
-                            playTrackAt(nextIndex)
+                            playTrackAt(nextIndex, reason = "user_next")
                         }
                         sendEvent("RemoteNextTrackReceived", statePayload())
                     }
 
                     override fun onSkipToPrevious() {
                         if (playlist.isNotEmpty()) {
-                            playTrackAt(maxOf(0, playlistIndex - 1))
+                            playTrackAt(maxOf(0, playlistIndex - 1), reason = "user_previous")
                         }
                         sendEvent("RemotePreviousTrackReceived", statePayload())
                     }
@@ -422,7 +422,7 @@ class AudioFunctions {
         private fun effectiveTrackIndex(logicalIndex: Int): Int =
             if (shuffledOrder.isNotEmpty()) shuffledOrder.getOrNull(logicalIndex) ?: logicalIndex else logicalIndex
 
-        internal fun playTrackAt(index: Int, seekToSeconds: Double = 0.0) {
+        internal fun playTrackAt(index: Int, seekToSeconds: Double = 0.0, reason: String = "auto_advance") {
             if (index < 0 || index >= playlist.size) return
 
             // Resolve a live context — prefer the current activity, fall back to appContext.
@@ -498,7 +498,7 @@ class AudioFunctions {
                             AudioService.start(ctx, metaTitle ?: "Now Playing", metaArtist)
 
                             val trackChangedPayload = mutableMapOf<String, Any>(
-                                "index" to index, "track" to trackPayload()
+                                "index" to index, "reason" to reason, "track" to trackPayload()
                             )
                             prevIndex?.let {
                                 trackChangedPayload["lastIndex"]    = it
@@ -521,12 +521,12 @@ class AudioFunctions {
         private fun advancePlaylist() {
             if (playlist.isEmpty()) return
             when (repeatMode) {
-                "one" -> playTrackAt(playlistIndex)
-                "all" -> playTrackAt((playlistIndex + 1) % playlist.size)
+                "one" -> playTrackAt(playlistIndex, reason = "repeat")
+                "all" -> playTrackAt((playlistIndex + 1) % playlist.size, reason = "auto_advance")
                 else  -> {
                     val next = playlistIndex + 1
                     if (next < playlist.size) {
-                        playTrackAt(next)
+                        playTrackAt(next, reason = "auto_advance")
                     } else {
                         val endedPayload = mutableMapOf<String, Any>()
                         if (playlistIndex >= 0) {
@@ -768,7 +768,7 @@ class AudioFunctions {
             if (mediaPlayer == null && playlist.isNotEmpty() && playlistIndex >= 0) {
                 val seekTo = pendingSeekSeconds
                 pendingSeekSeconds = 0.0
-                playTrackAt(playlistIndex, seekTo)
+                playTrackAt(playlistIndex, seekTo, reason = "user_selected")
                 return mapOf("success" to true)
             }
             requestAudioFocus(context)
@@ -940,7 +940,7 @@ class AudioFunctions {
 
             sendEvent("PlaylistSet", mapOf("total" to playlist.size))
             if (autoPlay) {
-                playTrackAt(startIndex, startSeconds)
+                playTrackAt(startIndex, startSeconds, reason = "user_selected")
             } else {
                 playlistIndex       = startIndex
                 pendingSeekSeconds  = startSeconds
@@ -958,7 +958,7 @@ class AudioFunctions {
                 (playlistIndex + 1) % playlist.size
             else
                 minOf(playlistIndex + 1, playlist.size - 1)
-            playTrackAt(nextIndex)
+            playTrackAt(nextIndex, reason = "user_next")
             return mapOf("success" to true)
         }
     }
@@ -967,7 +967,7 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
             if (playlist.isEmpty()) return mapOf("success" to false, "error" to "No playlist is active")
-            playTrackAt(maxOf(0, playlistIndex - 1))
+            playTrackAt(maxOf(0, playlistIndex - 1), reason = "user_previous")
             return mapOf("success" to true)
         }
     }
