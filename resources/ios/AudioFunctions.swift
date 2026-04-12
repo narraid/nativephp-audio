@@ -859,10 +859,11 @@ enum AudioFunctions {
             guard !AudioFunctions.playlist.isEmpty else {
                 return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
             }
+            let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0.0
             let nextIndex = AudioFunctions.repeatMode == "all"
                 ? (AudioFunctions.playlistIndex + 1) % AudioFunctions.playlist.count
                 : min(AudioFunctions.playlistIndex + 1, AudioFunctions.playlist.count - 1)
-            AudioFunctions.playTrackAt(index: nextIndex, reason: "user_next")
+            AudioFunctions.playTrackAt(index: nextIndex, seekTo: startSeconds, reason: "user_next")
             return BridgeResponse.success(data: ["success": true])
         }
     }
@@ -872,8 +873,56 @@ enum AudioFunctions {
             guard !AudioFunctions.playlist.isEmpty else {
                 return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
             }
-            AudioFunctions.playTrackAt(index: max(0, AudioFunctions.playlistIndex - 1), reason: "user_previous")
+            let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0.0
+            AudioFunctions.playTrackAt(index: max(0, AudioFunctions.playlistIndex - 1), seekTo: startSeconds, reason: "user_previous")
             return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class SkipTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard !AudioFunctions.playlist.isEmpty else {
+                return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
+            }
+            guard let index = (parameters["index"] as? NSNumber)?.intValue else {
+                return BridgeResponse.error(code: "MISSING_INDEX", message: "Missing index parameter.")
+            }
+            let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0.0
+            guard index >= 0 && index < AudioFunctions.playlist.count else {
+                return BridgeResponse.error(code: "OUT_OF_RANGE", message: "Index out of range.")
+            }
+            AudioFunctions.playTrackAt(index: index, seekTo: startSeconds, reason: "user_selected")
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class GetTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let index = (parameters["index"] as? NSNumber)?.intValue else {
+                return BridgeResponse.error(code: "MISSING_INDEX", message: "Missing index parameter.")
+            }
+            guard index >= 0 && index < AudioFunctions.playlist.count else {
+                return BridgeResponse.error(code: "OUT_OF_RANGE", message: "Index out of range.")
+            }
+            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[index]])
+        }
+    }
+
+    class GetActiveTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let idx = AudioFunctions.playlistIndex
+            guard idx >= 0 && idx < AudioFunctions.playlist.count else {
+                return BridgeResponse.success(data: ["track": NSNull()])
+            }
+            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[idx]])
+        }
+    }
+
+    class GetActiveTrackIndex: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let idx = AudioFunctions.playlistIndex
+            let index: Any = (idx >= 0 && idx < AudioFunctions.playlist.count) ? idx : NSNull()
+            return BridgeResponse.success(data: ["index": index])
         }
     }
 

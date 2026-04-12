@@ -954,11 +954,12 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
             if (playlist.isEmpty()) return mapOf("success" to false, "error" to "No playlist is active")
+            val startSeconds = (parameters["startSeconds"] as? Number)?.toDouble() ?: 0.0
             val nextIndex = if (repeatMode == "all")
                 (playlistIndex + 1) % playlist.size
             else
                 minOf(playlistIndex + 1, playlist.size - 1)
-            playTrackAt(nextIndex, reason = "user_next")
+            playTrackAt(nextIndex, startSeconds, reason = "user_next")
             return mapOf("success" to true)
         }
     }
@@ -967,8 +968,46 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
             if (playlist.isEmpty()) return mapOf("success" to false, "error" to "No playlist is active")
-            playTrackAt(maxOf(0, playlistIndex - 1), reason = "user_previous")
+            val startSeconds = (parameters["startSeconds"] as? Number)?.toDouble() ?: 0.0
+            playTrackAt(maxOf(0, playlistIndex - 1), startSeconds, reason = "user_previous")
             return mapOf("success" to true)
+        }
+    }
+
+    class SkipTrack(private val activity: FragmentActivity) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            activityRef = WeakReference(activity)
+            if (playlist.isEmpty()) return mapOf("success" to false, "error" to "No playlist is active")
+            val index        = (parameters["index"] as? Number)?.toInt() ?: return mapOf("success" to false, "error" to "Missing index")
+            val startSeconds = (parameters["startSeconds"] as? Number)?.toDouble() ?: 0.0
+            if (index < 0 || index >= playlist.size) return mapOf("success" to false, "error" to "Index out of range")
+            playTrackAt(index, startSeconds, reason = "user_selected")
+            return mapOf("success" to true)
+        }
+    }
+
+    class GetTrack(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val index = (parameters["index"] as? Number)?.toInt()
+                ?: return mapOf("success" to false, "error" to "Missing index")
+            if (index < 0 || index >= playlist.size)
+                return mapOf("success" to false, "error" to "Index out of range")
+            return mapOf("success" to true, "track" to playlist[index])
+        }
+    }
+
+    class GetActiveTrack(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            if (playlistIndex < 0 || playlistIndex >= playlist.size)
+                return mapOf("success" to true, "track" to null)
+            return mapOf("success" to true, "track" to playlist[playlistIndex])
+        }
+    }
+
+    class GetActiveTrackIndex(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val index = if (playlistIndex >= 0 && playlistIndex < playlist.size) playlistIndex else null
+            return mapOf("success" to true, "index" to index)
         }
     }
 

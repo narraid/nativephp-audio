@@ -844,3 +844,30 @@ timestamp correlation rather than a direct signal.
 │ Resume cold-start                  │ "user_selected" │
 └────────────────────────────────────┴─────────────────┘
 
+Changes made:
+
+src/Audio.php
+- nextTrack(float $startSeconds = 0.0) — passes startSeconds in JSON payload
+- previousTrack(float $startSeconds = 0.0) — passes startSeconds in JSON payload
+- New skipTrack(int $index, float $startSeconds = 0.0) — calls Audio.skipTrack bridge
+
+resources/android/com/narraid/audio/AudioFunctions.kt
+- NextTrack — reads startSeconds from parameters, passes to playTrackAt
+- PreviousTrack — same
+- New SkipTrack class — validates index bounds, passes both to playTrackAt with reason = "user_selected"
+
+resources/ios/AudioFunctions.swift
+- NextTrack — reads startSeconds, passes as seekTo: arg to playTrackAt
+- PreviousTrack — same
+- New SkipTrack class — validates index bounds, calls playTrackAt(index:seekTo:reason:)
+
+
+Done. Three functions added across all files:
+
+src/Audio.php
+- getTrack(int $index): ?array — returns the track at the given playlist index, or null
+- getActiveTrack(): ?array — returns the currently active track, or null if nothing loaded
+- getActiveTrackIndex(): ?int — returns the current playlist index, or null if no track loaded
+
+Kotlin (GetTrack, GetActiveTrack, GetActiveTrackIndex) and Swift (GetTrack, GetActiveTrack, GetActiveTrackIndex) — all added before GetPlaylist, with consistent null handling (null /   
+NSNull() when playlistIndex is -1 or out of range).                      

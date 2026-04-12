@@ -405,12 +405,14 @@ class Audio
     }
 
     /**
-     * Skip to the next track in the active playlist
+     * Skip to the next track in the active playlist.
+     *
+     * @param  float  $startSeconds  Sets the initial playback position for the track you're skipping to (optional)
      */
-    public function nextTrack(): bool
+    public function nextTrack(float $startSeconds = 0.0): bool
     {
         if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.nextTrack', '{}');
+            $result = nativephp_call('Audio.nextTrack', json_encode(['startSeconds' => $startSeconds]));
 
             if ($result) {
                 $decoded = json_decode($result, true);
@@ -423,12 +425,14 @@ class Audio
     }
 
     /**
-     * Skip to the previous track in the active playlist
+     * Skip to the previous track in the active playlist.
+     *
+     * @param  float  $startSeconds  Sets the initial playback position for the track you're skipping to (optional)
      */
-    public function previousTrack(): bool
+    public function previousTrack(float $startSeconds = 0.0): bool
     {
         if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.previousTrack', '{}');
+            $result = nativephp_call('Audio.previousTrack', json_encode(['startSeconds' => $startSeconds]));
 
             if ($result) {
                 $decoded = json_decode($result, true);
@@ -438,6 +442,86 @@ class Audio
         }
 
         return false;
+    }
+
+    /**
+     * Skip to a specific track in the active playlist by index.
+     *
+     * @param  int    $index         Zero-based index of the track to skip to
+     * @param  float  $startSeconds  Sets the initial playback position for the track you're skipping to (optional)
+     */
+    public function skipTrack(int $index, float $startSeconds = 0.0): bool
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.skipTrack', json_encode([
+                'index'        => $index,
+                'startSeconds' => $startSeconds,
+            ]));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return (bool) ($decoded['success'] ?? false);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Get a track from the active playlist by index.
+     *
+     * @param  int  $index  Zero-based index of the track to retrieve
+     */
+    public function getTrack(int $index): ?array
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.getTrack', json_encode(['index' => $index]));
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return isset($decoded['track']) && is_array($decoded['track']) ? $decoded['track'] : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the currently active (playing or loaded) track, or null if no track is loaded.
+     */
+    public function getActiveTrack(): ?array
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.getActiveTrack', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return isset($decoded['track']) && is_array($decoded['track']) ? $decoded['track'] : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get the index of the currently active track in the playlist, or null if no track is loaded.
+     */
+    public function getActiveTrackIndex(): ?int
+    {
+        if (function_exists('nativephp_call')) {
+            $result = nativephp_call('Audio.getActiveTrackIndex', '{}');
+
+            if ($result) {
+                $decoded = json_decode($result, true);
+
+                return isset($decoded['index']) ? (int) $decoded['index'] : null;
+            }
+        }
+
+        return null;
     }
 
     /**
