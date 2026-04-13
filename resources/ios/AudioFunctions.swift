@@ -602,6 +602,10 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
 
+            let prevIndex: Int?           = AudioFunctions.playlistIndex >= 0 ? AudioFunctions.playlistIndex : nil
+            let prevPosition: Double      = AudioFunctions.positionSeconds()
+            let prevTrack: [String: Any]? = prevIndex.map { AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: $0)] }
+
             AudioFunctions.playlist      = []
             AudioFunctions.playlistIndex = -1
 
@@ -617,6 +621,14 @@ enum AudioFunctions {
                                          album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
             AudioFunctions.syncNowPlayingState()
 
+            var trackChangedPayload: [String: Any] = ["index": 0, "reason": "user_selected", "track": AudioFunctions.trackPayload()]
+            if let pi = prevIndex {
+                trackChangedPayload["lastIndex"]    = pi
+                trackChangedPayload["lastPosition"] = prevPosition
+            }
+            if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
+            AudioFunctions.sendEvent("PlaylistTrackChanged", trackChangedPayload)
+
             AudioFunctions.sendEvent("PlaybackLoaded", ["track": AudioFunctions.trackPayload()])
 
             return BridgeResponse.success(data: ["success": true])
@@ -629,6 +641,10 @@ enum AudioFunctions {
                   let url = URL(string: urlString) else {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
+
+            let prevIndex: Int?           = AudioFunctions.playlistIndex >= 0 ? AudioFunctions.playlistIndex : nil
+            let prevPosition: Double      = AudioFunctions.positionSeconds()
+            let prevTrack: [String: Any]? = prevIndex.map { AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: $0)] }
 
             AudioFunctions.playlist      = []
             AudioFunctions.playlistIndex = -1
@@ -650,6 +666,14 @@ enum AudioFunctions {
             AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
 
             AudioFunctions.sendEvent("PlaybackStarted", ["track": AudioFunctions.trackPayload(), "position": 0.0])
+
+            var trackChangedPayload: [String: Any] = ["index": 0, "reason": "user_selected", "track": AudioFunctions.trackPayload()]
+            if let pi = prevIndex {
+                trackChangedPayload["lastIndex"]    = pi
+                trackChangedPayload["lastPosition"] = prevPosition
+            }
+            if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
+            AudioFunctions.sendEvent("PlaylistTrackChanged", trackChangedPayload)
 
             return BridgeResponse.success(data: ["success": true])
         }
@@ -822,9 +846,13 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "items must be a non-empty array of track objects.")
             }
 
-            let autoPlay    = parameters["autoPlay"]    as? Bool ?? true
-            let startIndex  = (parameters["startIndex"]  as? NSNumber)?.intValue  ?? 0
+            let autoPlay     = parameters["autoPlay"]     as? Bool ?? true
+            let startIndex   = (parameters["startIndex"]   as? NSNumber)?.intValue    ?? 0
             let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0
+
+            let prevIndex: Int?           = AudioFunctions.playlistIndex >= 0 ? AudioFunctions.playlistIndex : nil
+            let prevPosition: Double      = AudioFunctions.positionSeconds()
+            let prevTrack: [String: Any]? = prevIndex.map { AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: $0)] }
 
             AudioFunctions.playlist      = items
             AudioFunctions.playlistIndex = -1
@@ -835,7 +863,18 @@ enum AudioFunctions {
                 AudioFunctions.shuffledOrder = []
             }
 
-            AudioFunctions.sendEvent("PlaylistSet", ["total": items.count])
+            var playlistSetPayload: [String: Any] = [
+                "total":        items.count,
+                "startIndex":   startIndex,
+                "autoPlay":     autoPlay,
+                "startSeconds": startSeconds,
+            ]
+            if let pi = prevIndex {
+                playlistSetPayload["lastIndex"]    = pi
+                playlistSetPayload["lastPosition"] = prevPosition
+            }
+            if let pt = prevTrack { playlistSetPayload["lastTrack"] = pt }
+            AudioFunctions.sendEvent("PlaylistSet", playlistSetPayload)
 
             if autoPlay {
                 AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds, reason: "user_selected")

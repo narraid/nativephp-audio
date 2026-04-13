@@ -221,16 +221,22 @@ class AudioFunctions {
                                 (playlistIndex + 1) % playlist.size
                             else
                                 minOf(playlistIndex + 1, playlist.size - 1)
-                            playTrackAt(nextIndex, reason = "user_next")
+                            playTrackAt(nextIndex, reason = "user_next", afterStarted = {
+                                sendEvent("RemoteNextTrackReceived", statePayload())
+                            })
+                        } else {
+                            sendEvent("RemoteNextTrackReceived", statePayload())
                         }
-                        sendEvent("RemoteNextTrackReceived", statePayload())
                     }
 
                     override fun onSkipToPrevious() {
                         if (playlist.isNotEmpty()) {
-                            playTrackAt(maxOf(0, playlistIndex - 1), reason = "user_previous")
+                            playTrackAt(maxOf(0, playlistIndex - 1), reason = "user_previous", afterStarted = {
+                                sendEvent("RemotePreviousTrackReceived", statePayload())
+                            })
+                        } else {
+                            sendEvent("RemotePreviousTrackReceived", statePayload())
                         }
-                        sendEvent("RemotePreviousTrackReceived", statePayload())
                     }
 
                     override fun onSeekTo(pos: Long) {
@@ -507,6 +513,7 @@ class AudioFunctions {
                             prevTrack?.let { trackChangedPayload["lastTrack"] = it }
                             sendEvent("PlaylistTrackChanged", trackChangedPayload)
                             sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to seekToSeconds))
+                            afterStarted?.invoke()
                         }
 
                         attachCommonListeners(this)
@@ -617,6 +624,13 @@ class AudioFunctions {
             activityRef = WeakReference(activity)
             appContext  = activity.applicationContext
 
+            val prevTrackIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
+            val prevPosition: Double = positionSeconds()
+            @Suppress("UNCHECKED_CAST")
+            val prevTrackData: Map<String, Any>? = prevTrackIndex
+                ?.takeIf { it < playlist.size }
+                ?.let { playlist[effectiveTrackIndex(it)] as? Map<String, Any> }
+
             playlist.clear()
             playlistIndex = -1
 
@@ -664,6 +678,15 @@ class AudioFunctions {
 
                         setOnPreparedListener { _ ->
                             updateSessionState()
+                            val trackChangedPayload = mutableMapOf<String, Any>(
+                                "index" to 0, "reason" to "user_selected", "track" to trackPayload()
+                            )
+                            prevTrackIndex?.let {
+                                trackChangedPayload["lastIndex"]    = it
+                                trackChangedPayload["lastPosition"] = prevPosition
+                            }
+                            prevTrackData?.let { trackChangedPayload["lastTrack"] = it }
+                            sendEvent("PlaylistTrackChanged", trackChangedPayload)
                             sendEvent("PlaybackLoaded", mapOf("track" to trackPayload()))
                         }
                         attachCommonListeners(this)
@@ -682,6 +705,13 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
             appContext  = activity.applicationContext
+
+            val prevTrackIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
+            val prevPosition: Double = positionSeconds()
+            @Suppress("UNCHECKED_CAST")
+            val prevTrackData: Map<String, Any>? = prevTrackIndex
+                ?.takeIf { it < playlist.size }
+                ?.let { playlist[effectiveTrackIndex(it)] as? Map<String, Any> }
 
             playlist.clear()
             playlistIndex = -1
@@ -738,6 +768,15 @@ class AudioFunctions {
                             AudioService.start(activity, metaTitle ?: "Now Playing", metaArtist)
 
                             sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to 0.0))
+                            val trackChangedPayload = mutableMapOf<String, Any>(
+                                "index" to 0, "reason" to "user_selected", "track" to trackPayload()
+                            )
+                            prevTrackIndex?.let {
+                                trackChangedPayload["lastIndex"]    = it
+                                trackChangedPayload["lastPosition"] = prevPosition
+                            }
+                            prevTrackData?.let { trackChangedPayload["lastTrack"] = it }
+                            sendEvent("PlaylistTrackChanged", trackChangedPayload)
                         }
                         attachCommonListeners(this)
                         prepareAsync()
@@ -909,6 +948,13 @@ class AudioFunctions {
                 return mapOf("success" to false, "error" to "items array must not be empty")
             }
 
+            val prevTrackIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
+            val prevPosition: Double = positionSeconds()
+            @Suppress("UNCHECKED_CAST")
+            val prevTrackData: Map<String, Any>? = prevTrackIndex
+                ?.takeIf { it < playlist.size }
+                ?.let { playlist[effectiveTrackIndex(it)] as? Map<String, Any> }
+
             playlist.clear()
             for (i in 0 until itemsJson.length()) {
                 val item  = itemsJson.getJSONObject(i)
@@ -929,7 +975,18 @@ class AudioFunctions {
             val startIndex   = params.optInt("startIndex", 0)
             val startSeconds = params.optDouble("startSeconds", 0.0)
 
-            sendEvent("PlaylistSet", mapOf("total" to playlist.size))
+            val playlistSetPayload = mutableMapOf<String, Any>(
+                "total"        to playlist.size,
+                "startIndex"   to startIndex,
+                "autoPlay"     to autoPlay,
+                "startSeconds" to startSeconds,
+            )
+            prevTrackIndex?.let {
+                playlistSetPayload["lastIndex"]    = it
+                playlistSetPayload["lastPosition"] = prevPosition
+            }
+            prevTrackData?.let { playlistSetPayload["lastTrack"] = it }
+            sendEvent("PlaylistSet", playlistSetPayload)
             if (autoPlay) {
                 playTrackAt(startIndex, startSeconds, reason = "user_selected")
             } else {

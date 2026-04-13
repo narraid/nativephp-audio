@@ -973,5 +973,5 @@ Summary table
 ├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
 │ 9   │ Single-track play()/load() skips PlaylistTrackChanged │ Design gap               │ Both           │
 ├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
-│ 10  │ PlaylistSet carries no track context                  │ Minimal event            │ Both           │
+│ 10x  │ PlaylistSet carries no track context                  │ Minimal event            │ Both           │
 └─────┴───────────────────────────────────────────────────────┴──────────────────────────┴────────────────┘         
