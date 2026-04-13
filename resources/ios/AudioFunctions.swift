@@ -924,8 +924,10 @@ enum AudioFunctions {
             if autoPlay {
                 AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds, reason: "user_selected")
             } else {
-                AudioFunctions.playlistIndex    = startIndex
+                AudioFunctions.playlistIndex      = startIndex
                 AudioFunctions.pendingSeekSeconds = startSeconds
+                // Release any existing player so resume() cold-starts and seeks to startSeconds.
+                AudioFunctions.resetPlayer()
             }
 
             return BridgeResponse.success(data: ["success": true])

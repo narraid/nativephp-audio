@@ -993,8 +993,14 @@ class AudioFunctions {
             if (autoPlay) {
                 playTrackAt(startIndex, startSeconds, reason = "user_selected")
             } else {
-                playlistIndex       = startIndex
-                pendingSeekSeconds  = startSeconds
+                playlistIndex      = startIndex
+                pendingSeekSeconds = startSeconds
+                // Release any existing player so resume() cold-starts and seeks to startSeconds.
+                stopProgressTimer()
+                try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
+                mediaPlayer?.release()
+                mediaPlayer = null
+                abandonAudioFocus()
             }
 
             return mapOf("success" to true)
