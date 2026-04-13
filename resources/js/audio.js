@@ -86,6 +86,22 @@ const audioPlayer = {
         return await window.nativephp.call('Audio.previousTrack');
     },
 
+    skipTrack: async (index, startSeconds = 0) => {
+        return await window.nativephp.call('Audio.skipTrack', { index, startSeconds });
+    },
+
+    getTrack: async (index) => {
+        return await window.nativephp.call('Audio.getTrack', { index });
+    },
+
+    getActiveTrack: async () => {
+        return await window.nativephp.call('Audio.getActiveTrack');
+    },
+
+    getActiveTrackIndex: async () => {
+        return await window.nativephp.call('Audio.getActiveTrackIndex');
+    },
+
     getPlaylist: async () => {
         return await window.nativephp.call('Audio.getPlaylist');
     },
