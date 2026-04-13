@@ -56,6 +56,7 @@ class AudioFunctions {
         private var audioFocusRequest: AudioFocusRequest? = null
         internal var userVolume: Float = 1.0f
         private var pausedByFocusLoss = false
+        private var isDucked = false
 
         // ── Playback Settings ─────────────────────────────────────────────────
         private var playbackRate: Float = 1.0f
@@ -343,10 +344,12 @@ class AudioFunctions {
                     }
                 }
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    isDucked = true
                     mediaPlayer?.setVolume(userVolume * DUCK_FACTOR, userVolume * DUCK_FACTOR)
                     sendEvent("AudioFocusDucked", statePayload())
                 }
                 AudioManager.AUDIOFOCUS_GAIN -> {
+                    isDucked = false
                     mediaPlayer?.setVolume(userVolume, userVolume)
                     if (pausedByFocusLoss && mediaPlayer != null) {
                         pausedByFocusLoss = false
@@ -849,7 +852,8 @@ class AudioFunctions {
             val level = JSONObject(parameters).optDouble("level", 1.0)
                 .coerceIn(0.0, 1.0).toFloat()
             userVolume = level
-            mediaPlayer?.setVolume(level, level)
+            val effective = if (isDucked) level * DUCK_FACTOR else level
+            mediaPlayer?.setVolume(effective, effective)
             return mapOf("success" to true)
         }
     }
@@ -976,7 +980,6 @@ class AudioFunctions {
             val startSeconds = params.optDouble("startSeconds", 0.0)
 
             val playlistSetPayload = mutableMapOf<String, Any>(
-                "total"        to playlist.size,
                 "startIndex"   to startIndex,
                 "autoPlay"     to autoPlay,
                 "startSeconds" to startSeconds,

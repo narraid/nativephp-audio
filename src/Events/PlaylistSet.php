@@ -10,7 +10,6 @@ class PlaylistSet
     use Dispatchable, SerializesModels;
 
     public function __construct(
-        public int $total,
         public int $startIndex,
         public bool $autoPlay,
         public float $startSeconds,

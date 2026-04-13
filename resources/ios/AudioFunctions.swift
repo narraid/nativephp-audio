@@ -910,7 +910,6 @@ enum AudioFunctions {
             }
 
             var playlistSetPayload: [String: Any] = [
-                "total":        items.count,
                 "startIndex":   startIndex,
                 "autoPlay":     autoPlay,
                 "startSeconds": startSeconds,

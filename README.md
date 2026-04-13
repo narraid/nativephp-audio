@@ -999,4 +999,64 @@ Fix 3 — null vs NSNull() in GetActiveTrack / GetActiveTrackIndex (Android)
 Changed Kotlin null → JSONObject.NULL so the JSON output contains an explicit "track": null / "index": null key rather than an absent key. This makes the serialised response identical
 to what Swift sends with NSNull().
 
-✻ Brewed for 2m 24s                                               
+✻ Brewed for 2m 24s             
+
+
+1. SetVolume overrides duck factor on Android — isDucked not tracked (Android only)
+
+Severity: Bug
+
+iOS tracks a persistent isDucked flag and applies the duck factor in SetVolume:                                                                                                          
+// Swift SetVolume
+AudioFunctions.userVolume  = level                                                                                                                                                       
+AudioFunctions.player?.volume = AudioFunctions.isDucked ? level * AudioFunctions.duckFactor : level
+
+Android has no isDucked flag. SetVolume unconditionally sets the full user level:                                                                                                        
+// Kotlin SetVolume                                                                                                                                                                      
+userVolume = level                                                                                                                                                                       
+mediaPlayer?.setVolume(level, level)   // ← duck factor ignored
+
+The duck is applied reactively via the audio focus callback:                                                                                                                             
+AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {                                                                                                                                     
+mediaPlayer?.setVolume(userVolume * DUCK_FACTOR, userVolume * DUCK_FACTOR)                                                                                                           
+...                                                                                                                                                                                  
+}
+
+Scenario that breaks: ducking is active → user calls Audio::setVolume(0.8) → Android sets the player to 0.8 (full), removing the duck effect entirely. iOS correctly sets it to 0.8 * 0.2
+= 0.16.
+
+Fix: add a private var isDucked: Boolean = false flag in the Android companion object, set it to true in the AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK handler and false in AUDIOFOCUS_GAIN,    
+then apply it in SetVolume the same way iOS does.
+                                                                                                                                                                                           
+---                                                       
+Everything else checked out:
+
+┌──────────────────────────────────────────────────────────────────────┬─────────────────────────────┐
+│                                Check                                 │           Result            │                                                                                   
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ All 28 bridge functions present on both platforms                    │ ✓                           │                                                                                   
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ All event payload keys match PHP constructors on both platforms      │ ✓                           │                                                                                   
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ All PHP→native parameter key names match                             │ ✓                           │                                                                                   
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ PHP reads correct return keys for all data-returning functions       │ ✓                           │
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ Event firing order identical on both platforms                       │ ✓                           │
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ Clamping consistent on both platforms                                │ ✓                           │
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ effectiveTrackIndex/effectivePlaylistIndex used correctly everywhere │ ✓                           │
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ statePayload() and trackPayload() keys identical on both platforms   │ ✓                           │
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ silenceHintObserver guarded against double-registration on iOS       │ ✓                           │
+├──────────────────────────────────────────────────────────────────────┼─────────────────────────────┤                                                                                   
+│ SetPlaybackRate / SetProgressInterval return values                  │ ✓ both return clamped value │
+└──────────────────────────────────────────────────────────────────────┴─────────────────────────────┘ 
+
+Done. Three changes to AudioFunctions.kt:
+
+1. Added private var isDucked = false alongside the other audio focus state vars.
+2. Set isDucked = true/false in the focus listener — true when AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK fires, false when AUDIOFOCUS_GAIN fires.
+3. SetVolume now respects the duck state — computes effective = if (isDucked) level * DUCK_FACTOR else level and applies that to the player, matching iOS behaviour exactly.     
