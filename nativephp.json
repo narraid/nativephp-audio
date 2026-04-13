@@ -105,6 +105,30 @@
             "description": "Skip to the previous track in the active playlist"
         },
         {
+            "name": "Audio.skipTrack",
+            "android": "com.narraid.audio.AudioFunctions.SkipTrack",
+            "ios": "AudioFunctions.SkipTrack",
+            "description": "Skip to a specific track in the active playlist by zero-based index"
+        },
+        {
+            "name": "Audio.getTrack",
+            "android": "com.narraid.audio.AudioFunctions.GetTrack",
+            "ios": "AudioFunctions.GetTrack",
+            "description": "Get a track from the active playlist by zero-based index"
+        },
+        {
+            "name": "Audio.getActiveTrack",
+            "android": "com.narraid.audio.AudioFunctions.GetActiveTrack",
+            "ios": "AudioFunctions.GetActiveTrack",
+            "description": "Get the currently active (playing or loaded) track, or null if none"
+        },
+        {
+            "name": "Audio.getActiveTrackIndex",
+            "android": "com.narraid.audio.AudioFunctions.GetActiveTrackIndex",
+            "ios": "AudioFunctions.GetActiveTrackIndex",
+            "description": "Get the index of the currently active track in the playlist, or null if none"
+        },
+        {
             "name": "Audio.getPlaylist",
             "android": "com.narraid.audio.AudioFunctions.GetPlaylist",
             "ios": "AudioFunctions.GetPlaylist",
