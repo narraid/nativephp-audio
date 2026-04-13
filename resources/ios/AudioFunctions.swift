@@ -31,12 +31,14 @@ enum AudioFunctions {
     private static var bufferingObservation: NSKeyValueObservation?
     private static var readyObservation: NSKeyValueObservation?
     private static var loadedObservation: NSKeyValueObservation?
+    private static var silenceHintObserver: Any?
 
     // MARK: - Flags
 
     private static var remoteCommandsRegistered = false
     private static var backgroundObserversRegistered = false
     private static var pausedByFocusLoss = false
+    private static var isDucked = false
     private static var isBuffering = false
 
     // MARK: - Playlist State
@@ -52,6 +54,10 @@ enum AudioFunctions {
 
     private static var playbackRate: Float = 1.0
     private static var progressInterval: Double = 10.0
+    private static var userVolume: Float = 1.0
+
+    // Duck factor applied when another app requests primary audio focus.
+    private static let duckFactor: Float = 0.2
 
     // MARK: - Sleep Timer
 
@@ -221,6 +227,8 @@ enum AudioFunctions {
         readyObservation     = nil
         loadedObservation?.invalidate()
         loadedObservation    = nil
+        if let o = silenceHintObserver { NotificationCenter.default.removeObserver(o) }
+        silenceHintObserver  = nil
     }
 
     private static func resetPlayer() {
@@ -480,8 +488,6 @@ enum AudioFunctions {
                 let opts = AVAudioSession.InterruptionOptions(
                     rawValue: notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 )
-                let payload = statePayload()
-                sendEvent("AudioFocusGained", payload)
                 if opts.contains(.shouldResume) && pausedByFocusLoss {
                     pausedByFocusLoss = false
                     try? AVAudioSession.sharedInstance().setActive(true)
@@ -489,9 +495,13 @@ enum AudioFunctions {
                     if playbackRate != 1.0 { player?.rate = playbackRate }
                     startProgressTimer(interval: progressInterval)
                     syncNowPlayingState()
-                    sendEvent("PlaybackResumed", payload)
+                    let payload = statePayload()
+                    sendEvent("AudioFocusGained",  payload)
+                    sendEvent("PlaybackResumed",   payload)
                 } else {
+                    // Interruption ended but system will not auto-resume — treat as permanent focus loss.
                     pausedByFocusLoss = false
+                    sendEvent("AudioFocusLost", statePayload())
                 }
 
             @unknown default:
@@ -514,6 +524,27 @@ enum AudioFunctions {
             let payload = statePayload()
             sendEvent("PlaybackPaused",          payload)
             sendEvent("AudioFocusLostTransient", payload)
+        }
+
+        silenceHintObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.silenceSecondaryAudioHintNotification,
+            object: nil, queue: .main
+        ) { notification in
+            guard let typeValue = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+                  let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: typeValue) else { return }
+
+            switch type {
+            case .begin:
+                isDucked = true
+                player?.volume = userVolume * duckFactor
+                sendEvent("AudioFocusDucked", statePayload())
+            case .end:
+                isDucked = false
+                player?.volume = userVolume
+                sendEvent("AudioFocusGained", statePayload())
+            @unknown default:
+                break
+            }
         }
     }
 
@@ -557,8 +588,9 @@ enum AudioFunctions {
             metaMetadata      = metadata
         }
 
-        playerItem = AVPlayerItem(url: url)
-        player     = AVPlayer(playerItem: playerItem)
+        playerItem     = AVPlayerItem(url: url)
+        player         = AVPlayer(playerItem: playerItem)
+        player?.volume = isDucked ? userVolume * duckFactor : userVolume
 
         refreshNowPlayingInfo()
 
@@ -750,7 +782,8 @@ enum AudioFunctions {
     class SetVolume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let level = max(0.0, min(1.0, (parameters["level"] as? NSNumber)?.floatValue ?? 1.0))
-            AudioFunctions.player?.volume = level
+            AudioFunctions.userVolume  = level
+            AudioFunctions.player?.volume = AudioFunctions.isDucked ? level * AudioFunctions.duckFactor : level
             return BridgeResponse.success(data: ["success": true])
         }
     }
