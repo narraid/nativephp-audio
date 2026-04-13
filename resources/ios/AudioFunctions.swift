@@ -30,6 +30,7 @@ enum AudioFunctions {
     private static weak var progressObserverPlayer: AVPlayer?
     private static var bufferingObservation: NSKeyValueObservation?
     private static var readyObservation: NSKeyValueObservation?
+    private static var loadedObservation: NSKeyValueObservation?
 
     // MARK: - Flags
 
@@ -218,6 +219,8 @@ enum AudioFunctions {
         bufferingObservation = nil
         readyObservation?.invalidate()
         readyObservation     = nil
+        loadedObservation?.invalidate()
+        loadedObservation    = nil
     }
 
     private static func resetPlayer() {
@@ -533,6 +536,8 @@ enum AudioFunctions {
         bufferingObservation = nil
         readyObservation?.invalidate()
         readyObservation     = nil
+        loadedObservation?.invalidate()
+        loadedObservation    = nil
         isBuffering          = false
 
         activateAudioSession()
@@ -629,7 +634,14 @@ enum AudioFunctions {
             if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
             AudioFunctions.sendEvent("PlaylistTrackChanged", trackChangedPayload)
 
-            AudioFunctions.sendEvent("PlaybackLoaded", ["track": AudioFunctions.trackPayload()])
+            // Defer PlaybackLoaded until AVPlayerItem.status == .readyToPlay, matching Android's
+            // onPrepared behaviour — the caller can safely call resume() when this fires.
+            AudioFunctions.loadedObservation = AudioFunctions.playerItem?.observe(\.status, options: [.new]) { item, _ in
+                guard item.status == .readyToPlay else { return }
+                AudioFunctions.loadedObservation?.invalidate()
+                AudioFunctions.loadedObservation = nil
+                AudioFunctions.sendEvent("PlaybackLoaded", ["track": AudioFunctions.trackPayload()])
+            }
 
             return BridgeResponse.success(data: ["success": true])
         }
