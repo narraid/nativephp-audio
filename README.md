@@ -974,4 +974,29 @@ Summary table
 │ 9   │ Single-track play()/load() skips PlaylistTrackChanged │ Design gap               │ Both           │
 ├─────┼───────────────────────────────────────────────────────┼──────────────────────────┼────────────────┤                                                                              
 │ 10x  │ PlaylistSet carries no track context                  │ Minimal event            │ Both           │
-└─────┴───────────────────────────────────────────────────────┴──────────────────────────┴────────────────┘         
+└─────┴───────────────────────────────────────────────────────┴──────────────────────────┴────────────────┘  
+
+
+All three fixes applied. Here's the summary:
+                                                                                          
+---                                                                                                                                                                                      
+Fix 1 — Event order in Play (both platforms)
+
+In both Kotlin and Swift Play, swapped PlaybackStarted and PlaylistTrackChanged so PlaylistTrackChanged always fires first — matching the order used by playTrackAt. The consistent      
+sequence is now PlaylistTrackChanged → PlaybackStarted everywhere.
+                                                            
+---                                                                                                                                                                                      
+Fix 2 — isDucked stale state after stop (iOS)
+
+Two changes:
+- Removed silenceHintObserver from removeObservers() with a comment explaining why — it must survive player resets to keep isDucked accurate during stopped state.
+- Added if silenceHintObserver == nil { … } guard around the registration inside setupAudioSessionObservers() to prevent double-registration (since preparePlayer calls                  
+  setupAudioSessionObservers() on every play, but the observer is no longer torn down).
+
+  ---                                                       
+Fix 3 — null vs NSNull() in GetActiveTrack / GetActiveTrackIndex (Android)
+
+Changed Kotlin null → JSONObject.NULL so the JSON output contains an explicit "track": null / "index": null key rather than an absent key. This makes the serialised response identical
+to what Swift sends with NSNull().
+
+✻ Brewed for 2m 24s                                               

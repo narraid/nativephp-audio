@@ -767,7 +767,6 @@ class AudioFunctions {
                             startProgressTimer(preferredProgressIntervalMs)
                             AudioService.start(activity, metaTitle ?: "Now Playing", metaArtist)
 
-                            sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to 0.0))
                             val trackChangedPayload = mutableMapOf<String, Any>(
                                 "index" to 0, "reason" to "user_selected", "track" to trackPayload()
                             )
@@ -777,6 +776,7 @@ class AudioFunctions {
                             }
                             prevTrackData?.let { trackChangedPayload["lastTrack"] = it }
                             sendEvent("PlaylistTrackChanged", trackChangedPayload)
+                            sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to 0.0))
                         }
                         attachCommonListeners(this)
                         prepareAsync()
@@ -1047,14 +1047,14 @@ class AudioFunctions {
     class GetActiveTrack(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             if (playlistIndex < 0 || playlistIndex >= playlist.size)
-                return mapOf("success" to true, "track" to null)
+                return mapOf("success" to true, "track" to JSONObject.NULL)
             return mapOf("success" to true, "track" to playlist[effectiveTrackIndex(playlistIndex)])
         }
     }
 
     class GetActiveTrackIndex(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val index = if (playlistIndex >= 0 && playlistIndex < playlist.size) playlistIndex else null
+            val index: Any = if (playlistIndex >= 0 && playlistIndex < playlist.size) playlistIndex else JSONObject.NULL
             return mapOf("success" to true, "index" to index)
         }
     }

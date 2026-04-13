@@ -227,8 +227,8 @@ enum AudioFunctions {
         readyObservation     = nil
         loadedObservation?.invalidate()
         loadedObservation    = nil
-        if let o = silenceHintObserver { NotificationCenter.default.removeObserver(o) }
-        silenceHintObserver  = nil
+        // silenceHintObserver is intentionally kept alive across player resets so that
+        // isDucked stays accurate even when no player is active.
     }
 
     private static func resetPlayer() {
@@ -526,24 +526,26 @@ enum AudioFunctions {
             sendEvent("AudioFocusLostTransient", payload)
         }
 
-        silenceHintObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.silenceSecondaryAudioHintNotification,
-            object: nil, queue: .main
-        ) { notification in
-            guard let typeValue = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
-                  let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: typeValue) else { return }
+        if silenceHintObserver == nil {
+            silenceHintObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.silenceSecondaryAudioHintNotification,
+                object: nil, queue: .main
+            ) { notification in
+                guard let typeValue = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+                      let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: typeValue) else { return }
 
-            switch type {
-            case .begin:
-                isDucked = true
-                player?.volume = userVolume * duckFactor
-                sendEvent("AudioFocusDucked", statePayload())
-            case .end:
-                isDucked = false
-                player?.volume = userVolume
-                sendEvent("AudioFocusGained", statePayload())
-            @unknown default:
-                break
+                switch type {
+                case .begin:
+                    isDucked = true
+                    player?.volume = userVolume * duckFactor
+                    sendEvent("AudioFocusDucked", statePayload())
+                case .end:
+                    isDucked = false
+                    player?.volume = userVolume
+                    sendEvent("AudioFocusGained", statePayload())
+                @unknown default:
+                    break
+                }
             }
         }
     }
@@ -709,8 +711,6 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
 
-            AudioFunctions.sendEvent("PlaybackStarted", ["track": AudioFunctions.trackPayload(), "position": 0.0])
-
             var trackChangedPayload: [String: Any] = ["index": 0, "reason": "user_selected", "track": AudioFunctions.trackPayload()]
             if let pi = prevIndex {
                 trackChangedPayload["lastIndex"]    = pi
@@ -718,6 +718,7 @@ enum AudioFunctions {
             }
             if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
             AudioFunctions.sendEvent("PlaylistTrackChanged", trackChangedPayload)
+            AudioFunctions.sendEvent("PlaybackStarted", ["track": AudioFunctions.trackPayload(), "position": 0.0])
 
             return BridgeResponse.success(data: ["success": true])
         }
