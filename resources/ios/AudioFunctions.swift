@@ -590,7 +590,7 @@ enum AudioFunctions {
             metaMetadata      = metadata
         }
 
-S        // Explicitly pause and release the outgoing player before creating a new one.
+        // Explicitly pause and release the outgoing player before creating a new one.
         // On iOS, AVPlayer instances continue playing even after their Swift reference is
         // overwritten — unlike Android where GC stops the player. Without this, skipping
         // tracks or calling SetPlaylist again causes two streams to play simultaneously.
