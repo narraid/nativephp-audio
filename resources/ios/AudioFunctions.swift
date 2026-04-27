@@ -96,12 +96,13 @@ enum AudioFunctions {
         [
             "track":       trackPayload(),
             "position":    positionSeconds(),
-            "isPlaying":   player?.rate ?? 0 > 0,
+            "buffered":    bufferedSeconds(),
+            "isPlaying":   (player?.rate ?? 0) > 0,
             "isBuffering": isBuffering,
         ]
     }
 
-    // MARK: - Position / Duration
+    // MARK: - Position / Duration / Buffered
 
     private static func positionSeconds() -> Double {
         let p = player?.currentTime().seconds ?? 0.0
@@ -111,6 +112,13 @@ enum AudioFunctions {
     private static func durationSeconds() -> Double {
         let d = playerItem?.duration.seconds ?? 0.0
         return (d.isNaN || d.isInfinite) ? 0.0 : d
+    }
+
+    private static func bufferedSeconds() -> Double {
+        guard let ranges = playerItem?.loadedTimeRanges, let first = ranges.first else { return 0.0 }
+        let range = first.timeRangeValue
+        let end   = CMTimeGetSeconds(CMTimeAdd(range.start, range.duration))
+        return end.isNaN || end.isInfinite ? 0.0 : end
     }
 
     // MARK: - Plugin Initialization
@@ -773,15 +781,43 @@ enum AudioFunctions {
         }
     }
 
+    class Reset: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let payload = AudioFunctions.statePayload()
+            AudioFunctions.resetPlayer()
+            AudioFunctions.playlist      = []
+            AudioFunctions.playlistIndex = -1
+            AudioFunctions.shuffledOrder = []
+            AudioFunctions.sendEvent("PlaybackStopped", payload)
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
     class Seek: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let seconds  = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
-            let from     = AudioFunctions.positionSeconds()
+            let seconds = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
+            let from    = AudioFunctions.positionSeconds()
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
                 AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
                 AudioFunctions.syncNowPlayingState()
                 AudioFunctions.sendEvent("PlaybackSeeked", [
                     "track": AudioFunctions.trackPayload(), "from": from, "to": seconds
+                ])
+            }
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class SeekBy: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let offset  = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
+            let from    = AudioFunctions.positionSeconds()
+            let target  = max(0.0, from + offset)
+            AudioFunctions.player?.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { _ in
+                AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
+                AudioFunctions.syncNowPlayingState()
+                AudioFunctions.sendEvent("PlaybackSeeked", [
+                    "track": AudioFunctions.trackPayload(), "from": from, "to": target
                 ])
             }
             return BridgeResponse.success(data: ["success": true])
@@ -836,13 +872,24 @@ enum AudioFunctions {
         }
     }
 
+    class GetProgress: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            return BridgeResponse.success(data: [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds(),
+                "buffered": AudioFunctions.bufferedSeconds(),
+            ])
+        }
+    }
+
     class GetState: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             return BridgeResponse.success(data: [
                 "track":         AudioFunctions.trackPayload(),
                 "position":      AudioFunctions.positionSeconds(),
                 "duration":      AudioFunctions.durationSeconds(),
-                "isPlaying":     AudioFunctions.player?.rate ?? 0 > 0,
+                "buffered":      AudioFunctions.bufferedSeconds(),
+                "isPlaying":     (AudioFunctions.player?.rate ?? 0) > 0,
                 "isBuffering":   AudioFunctions.isBuffering,
                 "hasPlayer":     AudioFunctions.player != nil,
                 "playbackRate":  AudioFunctions.playbackRate,
@@ -1090,19 +1137,63 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "index is out of range.")
             }
             AudioFunctions.playlist.remove(at: index)
-            // Rebuild shuffled order removing any reference to removed index and shifting higher indices down.
             if AudioFunctions.shuffleMode {
                 AudioFunctions.shuffledOrder = AudioFunctions.shuffledOrder
                     .filter { $0 != index }
                     .map { $0 > index ? $0 - 1 : $0 }
             }
-            // Adjust playlistIndex if needed.
             if AudioFunctions.playlistIndex > index {
                 AudioFunctions.playlistIndex -= 1
             } else if AudioFunctions.playlistIndex == index {
                 AudioFunctions.playlistIndex = -1
             }
             return BridgeResponse.success(data: ["success": true, "total": AudioFunctions.playlist.count])
+        }
+    }
+
+    class RemoveUpcomingTracks: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let idx = AudioFunctions.playlistIndex
+            if idx >= 0 && idx + 1 < AudioFunctions.playlist.count {
+                let removeFrom = idx + 1
+                AudioFunctions.playlist.removeSubrange(removeFrom...)
+                if AudioFunctions.shuffleMode {
+                    AudioFunctions.shuffledOrder = AudioFunctions.shuffledOrder.filter { $0 < removeFrom }
+                }
+            }
+            return BridgeResponse.success(data: ["success": true, "total": AudioFunctions.playlist.count])
+        }
+    }
+
+    class MoveTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let fromIndex = (parameters["fromIndex"] as? NSNumber)?.intValue,
+                  let toIndex   = (parameters["toIndex"]   as? NSNumber)?.intValue else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "fromIndex and toIndex are required.")
+            }
+            let count = AudioFunctions.playlist.count
+            guard fromIndex >= 0, fromIndex < count, toIndex >= 0, toIndex < count else {
+                return BridgeResponse.error(code: "OUT_OF_RANGE", message: "Index out of range.")
+            }
+            if fromIndex == toIndex { return BridgeResponse.success(data: ["success": true]) }
+
+            let track = AudioFunctions.playlist.remove(at: fromIndex)
+            AudioFunctions.playlist.insert(track, at: toIndex)
+
+            let cur = AudioFunctions.playlistIndex
+            if cur == fromIndex {
+                AudioFunctions.playlistIndex = toIndex
+            } else if fromIndex < toIndex && cur > fromIndex && cur <= toIndex {
+                AudioFunctions.playlistIndex -= 1
+            } else if toIndex < fromIndex && cur >= toIndex && cur < fromIndex {
+                AudioFunctions.playlistIndex += 1
+            }
+
+            if AudioFunctions.shuffleMode && !AudioFunctions.shuffledOrder.isEmpty {
+                AudioFunctions.shuffledOrder = Array(0..<AudioFunctions.playlist.count).shuffled()
+            }
+
+            return BridgeResponse.success(data: ["success": true])
         }
     }
 }

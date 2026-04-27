@@ -33,10 +33,22 @@
             "description": "Stop the audio playback and reset the position"
         },
         {
+            "name": "Audio.reset",
+            "android": "com.narraid.audio.AudioFunctions.Reset",
+            "ios": "AudioFunctions.Reset",
+            "description": "Stop playback and clear the active playlist and all player state"
+        },
+        {
             "name": "Audio.seek",
             "android": "com.narraid.audio.AudioFunctions.Seek",
             "ios": "AudioFunctions.Seek",
             "description": "Seek to a specific position in the audio (in seconds)"
+        },
+        {
+            "name": "Audio.seekBy",
+            "android": "com.narraid.audio.AudioFunctions.SeekBy",
+            "ios": "AudioFunctions.SeekBy",
+            "description": "Seek relative to the current position (negative values seek backward)"
         },
         {
             "name": "Audio.setVolume",
@@ -67,6 +79,12 @@
             "android": "com.narraid.audio.AudioFunctions.GetCurrentPosition",
             "ios": "AudioFunctions.GetCurrentPosition",
             "description": "Get the current playback position in seconds"
+        },
+        {
+            "name": "Audio.getProgress",
+            "android": "com.narraid.audio.AudioFunctions.GetProgress",
+            "ios": "AudioFunctions.GetProgress",
+            "description": "Get position, duration, and buffered seconds in a single call"
         },
         {
             "name": "Audio.getState",
@@ -169,6 +187,18 @@
             "android": "com.narraid.audio.AudioFunctions.RemoveTrack",
             "ios": "AudioFunctions.RemoveTrack",
             "description": "Remove a track from the active playlist by zero-based index"
+        },
+        {
+            "name": "Audio.removeUpcomingTracks",
+            "android": "com.narraid.audio.AudioFunctions.RemoveUpcomingTracks",
+            "ios": "AudioFunctions.RemoveUpcomingTracks",
+            "description": "Remove all tracks after the currently playing track"
+        },
+        {
+            "name": "Audio.moveTrack",
+            "android": "com.narraid.audio.AudioFunctions.MoveTrack",
+            "ios": "AudioFunctions.MoveTrack",
+            "description": "Move a track from one queue position to another"
         }
     ],
 

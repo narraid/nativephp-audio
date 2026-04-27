@@ -12,6 +12,7 @@ class PlaybackProgressUpdated
     public function __construct(
         public array $track,
         public float $position,
+        public float $buffered,
         public bool $isBuffering,
         public bool $isPlaying,
     ) {
