@@ -75,6 +75,7 @@ class AudioFunctions {
         private var shuffleMode: Boolean = false
         private val shuffledOrder: MutableList<Int> = mutableListOf()
         private var isBuffering: Boolean = false
+        private var bufferingPercent: Int = 0
 
         // ── Sleep Timer ───────────────────────────────────────────────────────
         private var sleepTimerHandler: Handler? = null
@@ -106,7 +107,6 @@ class AudioFunctions {
                 pendingEvents.add(mapOf("event" to name, "payload" to payload))
                 return
             }
-            // Capture a strong reference now; re-validate inside the Handler post.
             val activity = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
                 ?: return
             val json = JSONObject(payload).toString()
@@ -132,11 +132,12 @@ class AudioFunctions {
         private fun statePayload(): Map<String, Any> = mapOf(
             "track"       to trackPayload(),
             "position"    to positionSeconds(),
+            "buffered"    to bufferedSeconds(),
             "isPlaying"   to (mediaPlayer?.isPlaying == true),
             "isBuffering" to isBuffering,
         )
 
-        // ── Position / Duration ───────────────────────────────────────────────
+        // ── Position / Duration / Buffered ────────────────────────────────────
 
         private fun positionSeconds(): Double = try {
             (mediaPlayer?.currentPosition ?: 0) / 1000.0
@@ -146,6 +147,11 @@ class AudioFunctions {
             val ms = mediaPlayer?.duration ?: 0
             if (ms < 0) 0.0 else ms / 1000.0
         } catch (_: IllegalStateException) { 0.0 }
+
+        private fun bufferedSeconds(): Double {
+            val duration = durationSeconds()
+            return if (duration > 0) duration * (bufferingPercent / 100.0) else 0.0
+        }
 
         // ── Session Metadata ──────────────────────────────────────────────────
 
@@ -242,7 +248,7 @@ class AudioFunctions {
 
                     override fun onSeekTo(pos: Long) {
                         val from = positionSeconds()
-                        mediaPlayer?.seekTo(pos.toInt())
+                        seekToMs(pos)
                         updateSessionState()
                         sendEvent("RemoteSeekReceived", mapOf(
                             "track" to trackPayload(), "position" to from, "seekTo" to pos / 1000.0
@@ -305,13 +311,23 @@ class AudioFunctions {
             session.setPlaybackState(state)
         }
 
+        // ── Seek Helper (avoids Int overflow for long files) ──────────────────
+
+        private fun seekToMs(posMs: Long) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                mediaPlayer?.seekTo(posMs, MediaPlayer.SEEK_CLOSEST)
+            } else {
+                mediaPlayer?.seekTo(posMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            }
+        }
+
         // ── Playback Rate ─────────────────────────────────────────────────────
 
         private fun applyPlaybackRate() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && playbackRate != 1.0f) {
                 try {
                     mediaPlayer?.playbackParams = PlaybackParams().setSpeed(playbackRate)
-                } catch (_: Exception) { /* ignore — not all streams support rate changes */ }
+                } catch (_: Exception) { /* not all streams support rate changes */ }
             }
         }
 
@@ -434,11 +450,9 @@ class AudioFunctions {
         internal fun playTrackAt(index: Int, seekToSeconds: Double = 0.0, reason: String = "auto_advance", afterStarted: (() -> Unit)? = null) {
             if (index < 0 || index >= playlist.size) return
 
-            // Resolve a live context — prefer the current activity, fall back to appContext.
             val context: Context = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
                 ?: appContext ?: return
 
-            // Capture previous state before overwriting playlistIndex.
             val prevIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
             val prevPosition: Double = positionSeconds()
             @Suppress("UNCHECKED_CAST")
@@ -475,7 +489,6 @@ class AudioFunctions {
             }
 
             Handler(Looper.getMainLooper()).post {
-                // Re-validate context inside the post — activity may have been destroyed.
                 val ctx = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
                     ?: appContext ?: return@post
 
@@ -483,6 +496,7 @@ class AudioFunctions {
                 try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
                 mediaPlayer?.release()
                 mediaPlayer = null
+                bufferingPercent = 0
 
                 if (metaTitle != null) applySessionMetadata(ctx)
 
@@ -501,7 +515,7 @@ class AudioFunctions {
                             applyPlaybackRate()
                             requestAudioFocus(ctx)
                             mp.start()
-                            if (seekToSeconds > 0) mp.seekTo((seekToSeconds * 1000).toInt())
+                            if (seekToSeconds > 0) seekToMs((seekToSeconds * 1000).toLong())
                             updateSessionState()
                             startProgressTimer(preferredProgressIntervalMs)
                             AudioService.start(ctx, metaTitle ?: "Now Playing", metaArtist)
@@ -519,6 +533,97 @@ class AudioFunctions {
                             afterStarted?.invoke()
                         }
 
+                        attachCommonListeners(this)
+                        prepareAsync()
+                    }
+                } catch (e: Exception) {
+                    sendEvent("PlaybackFailed", mapOf("track" to trackPayload(), "error" to (e.message ?: "Unknown error")))
+                }
+            }
+        }
+
+        // ── Shared single-track setup (used by Load and Play) ─────────────────
+
+        private fun setupSingleTrack(activity: FragmentActivity, params: JSONObject, autoPlay: Boolean) {
+            val prevTrackIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
+            val prevPosition   = positionSeconds()
+            @Suppress("UNCHECKED_CAST")
+            val prevTrackData: Map<String, Any>? = prevTrackIndex
+                ?.takeIf { it < playlist.size }
+                ?.let { playlist[effectiveTrackIndex(it)] as? Map<String, Any> }
+
+            playlist.clear()
+            playlistIndex = -1
+
+            val url      = params.optString("url")
+            val title    = params.optString("title").takeIf { it.isNotEmpty() }
+            val artist   = params.optString("artist").takeIf { it.isNotEmpty() }
+            val album    = params.optString("album").takeIf { it.isNotEmpty() }
+            val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
+            val duration = if (params.has("duration")) params.optDouble("duration") else null
+            val clip     = params.optString("clip").takeIf { it.isNotEmpty() }
+            val metadata = params.optJSONObject("metadata")?.let { obj ->
+                obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
+            }
+
+            currentUrl = url
+            if (title != null) {
+                metaTitle         = title
+                metaArtist        = artist
+                metaAlbum         = album
+                metaDurationMs    = duration?.let { (it * 1000).toLong() }
+                metaArtworkSource = artwork
+                metaClip          = clip
+                metaMetadata      = metadata
+            }
+
+            Handler(Looper.getMainLooper()).post {
+                val ctx = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
+                    ?: appContext ?: return@post
+
+                stopProgressTimer()
+                try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
+                mediaPlayer?.release()
+                mediaPlayer = null
+                bufferingPercent = 0
+
+                if (metaTitle != null) applySessionMetadata(activity)
+
+                try {
+                    mediaPlayer = MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .build()
+                        )
+                        setDataSource(ctx, Uri.parse(url))
+
+                        setOnPreparedListener { mp ->
+                            val trackChangedPayload = mutableMapOf<String, Any>(
+                                "index" to 0, "reason" to "user_selected", "track" to trackPayload()
+                            )
+                            prevTrackIndex?.let {
+                                trackChangedPayload["lastIndex"]    = it
+                                trackChangedPayload["lastPosition"] = prevPosition
+                            }
+                            prevTrackData?.let { trackChangedPayload["lastTrack"] = it }
+                            sendEvent("PlaylistTrackChanged", trackChangedPayload)
+
+                            if (autoPlay) {
+                                mp.setVolume(userVolume, userVolume)
+                                applyPlaybackRate()
+                                requestAudioFocus(ctx)
+                                mp.start()
+                                updateSessionState()
+                                startProgressTimer(preferredProgressIntervalMs)
+                                AudioService.start(ctx, metaTitle ?: "Now Playing", metaArtist)
+                                sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to 0.0))
+                            } else {
+                                updateSessionState()
+                                sendEvent("PlaybackLoaded", mapOf("track" to trackPayload()))
+                            }
+                        }
                         attachCommonListeners(this)
                         prepareAsync()
                     }
@@ -552,7 +657,7 @@ class AudioFunctions {
             }
         }
 
-        // ── Cleanup ───────────────────────────────────────────────────────────
+        // ── Sleep Timer ───────────────────────────────────────────────────────
 
         private fun startSleepTimer(minutes: Double) {
             cancelSleepTimer()
@@ -577,6 +682,9 @@ class AudioFunctions {
         }
 
         private fun attachCommonListeners(mp: MediaPlayer) {
+            mp.setOnBufferingUpdateListener { _, percent ->
+                bufferingPercent = percent
+            }
             mp.setOnInfoListener { _, what, _ ->
                 when (what) {
                     MediaPlayer.MEDIA_INFO_BUFFERING_START -> {
@@ -592,6 +700,7 @@ class AudioFunctions {
             }
             mp.setOnCompletionListener {
                 isBuffering = false
+                bufferingPercent = 0
                 stopProgressTimer()
                 sendEvent("PlaybackCompleted", mapOf("track" to trackPayload()))
                 advancePlaylist()
@@ -607,7 +716,8 @@ class AudioFunctions {
         }
 
         private fun releasePlayer() {
-            isBuffering = false
+            isBuffering      = false
+            bufferingPercent = 0
             cancelSleepTimer()
             stopProgressTimer()
             try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
@@ -626,80 +736,7 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
             appContext  = activity.applicationContext
-
-            val prevTrackIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
-            val prevPosition: Double = positionSeconds()
-            @Suppress("UNCHECKED_CAST")
-            val prevTrackData: Map<String, Any>? = prevTrackIndex
-                ?.takeIf { it < playlist.size }
-                ?.let { playlist[effectiveTrackIndex(it)] as? Map<String, Any> }
-
-            playlist.clear()
-            playlistIndex = -1
-
-            val params   = JSONObject(parameters)
-            val url      = params.optString("url")
-            val title    = params.optString("title").takeIf { it.isNotEmpty() }
-            val artist   = params.optString("artist").takeIf { it.isNotEmpty() }
-            val album    = params.optString("album").takeIf { it.isNotEmpty() }
-            val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
-            val duration = if (params.has("duration")) params.optDouble("duration") else null
-            val clip     = params.optString("clip").takeIf { it.isNotEmpty() }
-            val metadata = params.optJSONObject("metadata")?.let { obj ->
-                obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
-            }
-
-            currentUrl = url
-
-            if (title != null) {
-                metaTitle         = title
-                metaArtist        = artist
-                metaAlbum         = album
-                metaDurationMs    = duration?.let { (it * 1000).toLong() }
-                metaArtworkSource = artwork
-                metaClip          = clip
-                metaMetadata      = metadata
-            }
-
-            Handler(Looper.getMainLooper()).post {
-                stopProgressTimer()
-                try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
-                mediaPlayer?.release()
-                mediaPlayer = null
-
-                if (metaTitle != null) applySessionMetadata(activity)
-
-                try {
-                    mediaPlayer = MediaPlayer().apply {
-                        setAudioAttributes(
-                            AudioAttributes.Builder()
-                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                .setUsage(AudioAttributes.USAGE_MEDIA)
-                                .build()
-                        )
-                        setDataSource(activity, Uri.parse(url))
-
-                        setOnPreparedListener { _ ->
-                            updateSessionState()
-                            val trackChangedPayload = mutableMapOf<String, Any>(
-                                "index" to 0, "reason" to "user_selected", "track" to trackPayload()
-                            )
-                            prevTrackIndex?.let {
-                                trackChangedPayload["lastIndex"]    = it
-                                trackChangedPayload["lastPosition"] = prevPosition
-                            }
-                            prevTrackData?.let { trackChangedPayload["lastTrack"] = it }
-                            sendEvent("PlaylistTrackChanged", trackChangedPayload)
-                            sendEvent("PlaybackLoaded", mapOf("track" to trackPayload()))
-                        }
-                        attachCommonListeners(this)
-                        prepareAsync()
-                    }
-                } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("track" to trackPayload(), "error" to (e.message ?: "Unknown error")))
-                }
-            }
-
+            setupSingleTrack(activity, JSONObject(parameters), autoPlay = false)
             return mapOf("success" to true)
         }
     }
@@ -708,87 +745,7 @@ class AudioFunctions {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
             activityRef = WeakReference(activity)
             appContext  = activity.applicationContext
-
-            val prevTrackIndex: Int? = if (playlistIndex >= 0) playlistIndex else null
-            val prevPosition: Double = positionSeconds()
-            @Suppress("UNCHECKED_CAST")
-            val prevTrackData: Map<String, Any>? = prevTrackIndex
-                ?.takeIf { it < playlist.size }
-                ?.let { playlist[effectiveTrackIndex(it)] as? Map<String, Any> }
-
-            playlist.clear()
-            playlistIndex = -1
-
-            val params   = JSONObject(parameters)
-            val url      = params.optString("url")
-            val title    = params.optString("title").takeIf { it.isNotEmpty() }
-            val artist   = params.optString("artist").takeIf { it.isNotEmpty() }
-            val album    = params.optString("album").takeIf { it.isNotEmpty() }
-            val artwork  = params.optString("artwork").takeIf { it.isNotEmpty() }
-            val duration = if (params.has("duration")) params.optDouble("duration") else null
-            val clip     = params.optString("clip").takeIf { it.isNotEmpty() }
-            val metadata = params.optJSONObject("metadata")?.let { obj ->
-                obj.keys().asSequence().associateWith { key -> obj.get(key) as Any }
-            }
-
-            currentUrl = url
-
-            if (title != null) {
-                metaTitle         = title
-                metaArtist        = artist
-                metaAlbum         = album
-                metaDurationMs    = duration?.let { (it * 1000).toLong() }
-                metaArtworkSource = artwork
-                metaClip          = clip
-                metaMetadata      = metadata
-            }
-
-            Handler(Looper.getMainLooper()).post {
-                stopProgressTimer()
-                try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
-                mediaPlayer?.release()
-                mediaPlayer = null
-
-                if (metaTitle != null) applySessionMetadata(activity)
-
-                try {
-                    mediaPlayer = MediaPlayer().apply {
-                        setAudioAttributes(
-                            AudioAttributes.Builder()
-                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                                .setUsage(AudioAttributes.USAGE_MEDIA)
-                                .build()
-                        )
-                        setDataSource(activity, Uri.parse(url))
-
-                        setOnPreparedListener { mp ->
-                            mp.setVolume(userVolume, userVolume)
-                            applyPlaybackRate()
-                            requestAudioFocus(activity)
-                            mp.start()
-                            updateSessionState()
-                            startProgressTimer(preferredProgressIntervalMs)
-                            AudioService.start(activity, metaTitle ?: "Now Playing", metaArtist)
-
-                            val trackChangedPayload = mutableMapOf<String, Any>(
-                                "index" to 0, "reason" to "user_selected", "track" to trackPayload()
-                            )
-                            prevTrackIndex?.let {
-                                trackChangedPayload["lastIndex"]    = it
-                                trackChangedPayload["lastPosition"] = prevPosition
-                            }
-                            prevTrackData?.let { trackChangedPayload["lastTrack"] = it }
-                            sendEvent("PlaylistTrackChanged", trackChangedPayload)
-                            sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to 0.0))
-                        }
-                        attachCommonListeners(this)
-                        prepareAsync()
-                    }
-                } catch (e: Exception) {
-                    sendEvent("PlaybackFailed", mapOf("track" to trackPayload(), "error" to (e.message ?: "Unknown error")))
-                }
-            }
-
+            setupSingleTrack(activity, JSONObject(parameters), autoPlay = true)
             return mapOf("success" to true)
         }
     }
@@ -834,15 +791,39 @@ class AudioFunctions {
         }
     }
 
+    class Reset(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val payload = statePayload()
+            releasePlayer()
+            playlist.clear()
+            playlistIndex = -1
+            shuffledOrder.clear()
+            sendEvent("PlaybackStopped", payload)
+            return mapOf("success" to true)
+        }
+    }
+
     class Seek(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val params   = JSONObject(parameters)
-            val seconds  = maxOf(0.0, params.optDouble("seconds", 0.0))
-            val from     = positionSeconds()
-            mediaPlayer?.seekTo((seconds * 1000).toInt())
+            val seconds = maxOf(0.0, JSONObject(parameters).optDouble("seconds", 0.0))
+            val from    = positionSeconds()
+            seekToMs((seconds * 1000).toLong())
             updateSessionState()
             startProgressTimer(preferredProgressIntervalMs)
             sendEvent("PlaybackSeeked", mapOf("track" to trackPayload(), "from" to from, "to" to seconds))
+            return mapOf("success" to true)
+        }
+    }
+
+    class SeekBy(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val offset  = JSONObject(parameters).optDouble("seconds", 0.0)
+            val from    = positionSeconds()
+            val target  = (from + offset).coerceAtLeast(0.0)
+            seekToMs((target * 1000).toLong())
+            updateSessionState()
+            startProgressTimer(preferredProgressIntervalMs)
+            sendEvent("PlaybackSeeked", mapOf("track" to trackPayload(), "from" to from, "to" to target))
             return mapOf("success" to true)
         }
     }
@@ -889,11 +870,20 @@ class AudioFunctions {
             mapOf("position" to positionSeconds())
     }
 
+    class GetProgress(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> = mapOf(
+            "position" to positionSeconds(),
+            "duration" to durationSeconds(),
+            "buffered" to bufferedSeconds(),
+        )
+    }
+
     class GetState(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> = mapOf(
             "track"         to trackPayload(),
             "position"      to positionSeconds(),
             "duration"      to durationSeconds(),
+            "buffered"      to bufferedSeconds(),
             "isPlaying"     to (mediaPlayer?.isPlaying == true),
             "isBuffering"   to isBuffering,
             "hasPlayer"     to (mediaPlayer != null),
@@ -990,12 +980,12 @@ class AudioFunctions {
             }
             prevTrackData?.let { playlistSetPayload["lastTrack"] = it }
             sendEvent("PlaylistSet", playlistSetPayload)
+
             if (autoPlay) {
                 playTrackAt(startIndex, startSeconds, reason = "user_selected")
             } else {
                 playlistIndex      = startIndex
                 pendingSeekSeconds = startSeconds
-                // Release any existing player so resume() cold-starts and seeks to startSeconds.
                 stopProgressTimer()
                 try { mediaPlayer?.stop() } catch (_: IllegalStateException) {}
                 mediaPlayer?.release()
@@ -1039,6 +1029,35 @@ class AudioFunctions {
             val startSeconds = (parameters["startSeconds"] as? Number)?.toDouble() ?: 0.0
             if (index < 0 || index >= playlist.size) return mapOf("success" to false, "error" to "Index out of range")
             playTrackAt(index, startSeconds, reason = "user_selected")
+            return mapOf("success" to true)
+        }
+    }
+
+    class MoveTrack(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val fromIndex = (parameters["fromIndex"] as? Number)?.toInt()
+                ?: return mapOf("success" to false, "error" to "Missing fromIndex")
+            val toIndex = (parameters["toIndex"] as? Number)?.toInt()
+                ?: return mapOf("success" to false, "error" to "Missing toIndex")
+            if (fromIndex < 0 || fromIndex >= playlist.size || toIndex < 0 || toIndex >= playlist.size)
+                return mapOf("success" to false, "error" to "Index out of range")
+            if (fromIndex == toIndex) return mapOf("success" to true)
+
+            val track = playlist.removeAt(fromIndex)
+            playlist.add(toIndex, track)
+
+            playlistIndex = when {
+                playlistIndex == fromIndex                                        -> toIndex
+                fromIndex < toIndex && playlistIndex in (fromIndex + 1)..toIndex -> playlistIndex - 1
+                toIndex < fromIndex && playlistIndex in toIndex until fromIndex   -> playlistIndex + 1
+                else                                                              -> playlistIndex
+            }
+
+            if (shuffleMode && shuffledOrder.isNotEmpty()) {
+                shuffledOrder.clear()
+                shuffledOrder.addAll((0 until playlist.size).toMutableList().also { it.shuffle() })
+            }
+
             return mapOf("success" to true)
         }
     }
@@ -1154,6 +1173,19 @@ class AudioFunctions {
             when {
                 playlistIndex > index  -> playlistIndex--
                 playlistIndex == index -> playlistIndex = -1
+            }
+            return mapOf("success" to true, "total" to playlist.size)
+        }
+    }
+
+    class RemoveUpcomingTracks(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            if (playlistIndex >= 0 && playlistIndex + 1 < playlist.size) {
+                val removeFrom = playlistIndex + 1
+                playlist.subList(removeFrom, playlist.size).clear()
+                if (shuffleMode) {
+                    shuffledOrder.removeAll { it >= removeFrom }
+                }
             }
             return mapOf("success" to true, "total" to playlist.size)
         }
