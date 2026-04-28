@@ -11,15 +11,11 @@ class PlaylistTrackChanged
 
     public function __construct(
         public int $index,
-        public int $total,
-        public string $url,
-        public ?string $title = null,
-        public ?string $artist = null,
-        public ?string $album = null,
-        public ?float $duration = null,
-        public ?string $artwork = null,
-        public ?string $clip = null,
-        public ?array $metadata = null,
+        public string $reason,
+        public array $track,
+        public ?int $lastIndex = null,
+        public ?array $lastTrack = null,
+        public ?float $lastPosition = null,
     ) {
     }
 }

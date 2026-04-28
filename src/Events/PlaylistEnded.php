@@ -10,7 +10,9 @@ class PlaylistEnded
     use Dispatchable, SerializesModels;
 
     public function __construct(
-        public int $total,
+        public ?int $lastIndex = null,
+        public ?array $lastTrack = null,
+        public ?float $lastPosition = null,
     ) {
     }
 }

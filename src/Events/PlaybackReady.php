@@ -10,9 +10,7 @@ class PlaybackReady
     use Dispatchable, SerializesModels;
 
     public function __construct(
-        public string $url,
-        public float $duration,
-        public ?array $metadata = null,
+        public array $track,
     ) {
     }
 }

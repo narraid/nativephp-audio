@@ -30,12 +30,15 @@ enum AudioFunctions {
     private static weak var progressObserverPlayer: AVPlayer?
     private static var bufferingObservation: NSKeyValueObservation?
     private static var readyObservation: NSKeyValueObservation?
+    private static var loadedObservation: NSKeyValueObservation?
+    private static var silenceHintObserver: Any?
 
     // MARK: - Flags
 
     private static var remoteCommandsRegistered = false
     private static var backgroundObserversRegistered = false
     private static var pausedByFocusLoss = false
+    private static var isDucked = false
     private static var isBuffering = false
 
     // MARK: - Playlist State
@@ -51,6 +54,10 @@ enum AudioFunctions {
 
     private static var playbackRate: Float = 1.0
     private static var progressInterval: Double = 10.0
+    private static var userVolume: Float = 1.0
+
+    // Duck factor applied when another app requests primary audio focus.
+    private static let duckFactor: Float = 0.2
 
     // MARK: - Sleep Timer
 
@@ -73,26 +80,29 @@ enum AudioFunctions {
         LaravelBridge.shared.send?(eventPrefix + name, payload)
     }
 
-    private static func withMeta(_ base: [String: Any]) -> [String: Any] {
-        guard let m = metaMetadata else { return base }
-        var copy = base
-        copy["metadata"] = m
-        return copy
+    private static func trackPayload() -> [String: Any] {
+        var t: [String: Any] = ["url": currentURL]
+        if let title    = metaTitle         { t["title"]    = title }
+        if let artist   = metaArtist        { t["artist"]   = artist }
+        if let album    = metaAlbum         { t["album"]    = album }
+        if let d        = metaDuration      { t["duration"] = d }
+        if let artwork  = metaArtworkSource { t["artwork"]  = artwork }
+        if let clip     = metaClip          { t["clip"]     = clip }
+        if let metadata = metaMetadata      { t["metadata"] = metadata }
+        return t
     }
 
     private static func statePayload() -> [String: Any] {
-        var p: [String: Any] = [
+        [
+            "track":       trackPayload(),
             "position":    positionSeconds(),
-            "duration":    durationSeconds(),
-            "url":         currentURL,
-            "isPlaying":   player?.rate ?? 0 > 0,
+            "buffered":    bufferedSeconds(),
+            "isPlaying":   (player?.rate ?? 0) > 0,
             "isBuffering": isBuffering,
         ]
-        if let m = metaMetadata { p["metadata"] = m }
-        return p
     }
 
-    // MARK: - Position / Duration
+    // MARK: - Position / Duration / Buffered
 
     private static func positionSeconds() -> Double {
         let p = player?.currentTime().seconds ?? 0.0
@@ -102,6 +112,13 @@ enum AudioFunctions {
     private static func durationSeconds() -> Double {
         let d = playerItem?.duration.seconds ?? 0.0
         return (d.isNaN || d.isInfinite) ? 0.0 : d
+    }
+
+    private static func bufferedSeconds() -> Double {
+        guard let ranges = playerItem?.loadedTimeRanges, let first = ranges.first else { return 0.0 }
+        let range = first.timeRangeValue
+        let end   = CMTimeGetSeconds(CMTimeAdd(range.start, range.duration))
+        return end.isNaN || end.isInfinite ? 0.0 : end
     }
 
     // MARK: - Plugin Initialization
@@ -216,6 +233,10 @@ enum AudioFunctions {
         bufferingObservation = nil
         readyObservation?.invalidate()
         readyObservation     = nil
+        loadedObservation?.invalidate()
+        loadedObservation    = nil
+        // silenceHintObserver is intentionally kept alive across player resets so that
+        // isDucked stays accurate even when no player is active.
     }
 
     private static func resetPlayer() {
@@ -238,8 +259,14 @@ enum AudioFunctions {
         return shuffledOrder[logicalIndex]
     }
 
-    private static func playTrackAt(index: Int, seekTo: Double = 0) {
+    private static func playTrackAt(index: Int, seekTo: Double = 0, reason: String = "auto_advance") {
         guard index >= 0, index < playlist.count else { return }
+
+        // Capture previous state before overwriting playlistIndex.
+        let prevIndex: Int?           = playlistIndex >= 0 ? playlistIndex : nil
+        let prevPosition: Double      = positionSeconds()
+        let prevTrack: [String: Any]? = prevIndex.map { playlist[effectivePlaylistIndex(for: $0)] }
+
         playlistIndex = index
         let track = playlist[effectivePlaylistIndex(for: index)]
 
@@ -262,40 +289,37 @@ enum AudioFunctions {
         syncNowPlayingState()
         startProgressTimer(interval: progressInterval)
 
-        var trackChangedPayload: [String: Any] = ["index": index, "total": playlist.count, "url": urlString]
-        if let t = title    { trackChangedPayload["title"]    = t }
-        if let a = artist   { trackChangedPayload["artist"]   = a }
-        if let a = album    { trackChangedPayload["album"]    = a }
-        if let d = duration { trackChangedPayload["duration"] = d }
-        if let w = artwork  { trackChangedPayload["artwork"]  = w }
-        if let c = clip     { trackChangedPayload["clip"]     = c }
-        if let m = metadata { trackChangedPayload["metadata"] = m }
+        var trackChangedPayload: [String: Any] = ["index": index, "reason": reason, "track": trackPayload()]
+        if let pi = prevIndex {
+            trackChangedPayload["lastIndex"]    = pi
+            trackChangedPayload["lastPosition"] = prevPosition
+        }
+        if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
         sendEvent("PlaylistTrackChanged", trackChangedPayload)
-
-        var startedPayload: [String: Any] = ["url": urlString, "position": seekTo]
-        if let t = title    { startedPayload["title"]    = t }
-        if let a = artist   { startedPayload["artist"]   = a }
-        if let a = album    { startedPayload["album"]    = a }
-        if let d = duration { startedPayload["duration"] = d }
-        if let w = artwork  { startedPayload["artwork"]  = w }
-        if let c = clip     { startedPayload["clip"]     = c }
-        if let m = metadata { startedPayload["metadata"] = m }
-        sendEvent("PlaybackStarted", startedPayload)
+        sendEvent("PlaybackStarted", ["track": trackPayload(), "position": seekTo])
     }
 
     private static func advancePlaylist() {
         guard !playlist.isEmpty else { return }
         switch repeatMode {
         case "one":
-            playTrackAt(index: playlistIndex)
+            playTrackAt(index: playlistIndex, reason: "repeat")
         case "all":
-            playTrackAt(index: (playlistIndex + 1) % playlist.count)
+            playTrackAt(index: (playlistIndex + 1) % playlist.count, reason: "auto_advance")
         default:
             let next = playlistIndex + 1
             if next < playlist.count {
-                playTrackAt(index: next)
+                playTrackAt(index: next, reason: "auto_advance")
             } else {
-                sendEvent("PlaylistEnded", ["total": playlist.count])
+                var endedPayload: [String: Any] = [:]
+                if playlistIndex >= 0 {
+                    endedPayload["lastIndex"]    = playlistIndex
+                    endedPayload["lastPosition"] = positionSeconds()
+                    if playlistIndex < playlist.count {
+                        endedPayload["lastTrack"] = playlist[effectivePlaylistIndex(for: playlistIndex)]
+                    }
+                }
+                sendEvent("PlaylistEnded", endedPayload)
             }
         }
     }
@@ -402,7 +426,7 @@ enum AudioFunctions {
                 let nextIndex = repeatMode == "all"
                     ? (playlistIndex + 1) % playlist.count
                     : min(playlistIndex + 1, playlist.count - 1)
-                playTrackAt(index: nextIndex)
+                playTrackAt(index: nextIndex, reason: "user_next")
             }
             sendEvent("RemoteNextTrackReceived", statePayload())
             return .success
@@ -411,7 +435,7 @@ enum AudioFunctions {
         center.previousTrackCommand.isEnabled = true
         center.previousTrackCommand.addTarget { _ in
             if !playlist.isEmpty {
-                playTrackAt(index: max(0, playlistIndex - 1))
+                playTrackAt(index: max(0, playlistIndex - 1), reason: "user_previous")
             }
             sendEvent("RemotePreviousTrackReceived", statePayload())
             return .success
@@ -427,9 +451,9 @@ enum AudioFunctions {
             let duration = durationSeconds()
             player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) { _ in
                 syncNowPlayingState()
-                sendEvent("RemoteSeekReceived", withMeta([
-                    "position": from, "duration": duration, "url": currentURL, "seekTo": seekTo
-                ]))
+                sendEvent("RemoteSeekReceived", [
+                    "track": trackPayload(), "position": from, "seekTo": seekTo
+                ])
             }
             return .success
         }
@@ -472,8 +496,6 @@ enum AudioFunctions {
                 let opts = AVAudioSession.InterruptionOptions(
                     rawValue: notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 )
-                let payload = statePayload()
-                sendEvent("AudioFocusGained", payload)
                 if opts.contains(.shouldResume) && pausedByFocusLoss {
                     pausedByFocusLoss = false
                     try? AVAudioSession.sharedInstance().setActive(true)
@@ -481,9 +503,13 @@ enum AudioFunctions {
                     if playbackRate != 1.0 { player?.rate = playbackRate }
                     startProgressTimer(interval: progressInterval)
                     syncNowPlayingState()
-                    sendEvent("PlaybackResumed", payload)
+                    let payload = statePayload()
+                    sendEvent("AudioFocusGained",  payload)
+                    sendEvent("PlaybackResumed",   payload)
                 } else {
+                    // Interruption ended but system will not auto-resume — treat as permanent focus loss.
                     pausedByFocusLoss = false
+                    sendEvent("AudioFocusLost", statePayload())
                 }
 
             @unknown default:
@@ -507,6 +533,29 @@ enum AudioFunctions {
             sendEvent("PlaybackPaused",          payload)
             sendEvent("AudioFocusLostTransient", payload)
         }
+
+        if silenceHintObserver == nil {
+            silenceHintObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.silenceSecondaryAudioHintNotification,
+                object: nil, queue: .main
+            ) { notification in
+                guard let typeValue = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+                      let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: typeValue) else { return }
+
+                switch type {
+                case .begin:
+                    isDucked = true
+                    player?.volume = userVolume * duckFactor
+                    sendEvent("AudioFocusDucked", statePayload())
+                case .end:
+                    isDucked = false
+                    player?.volume = userVolume
+                    sendEvent("AudioFocusGained", statePayload())
+                @unknown default:
+                    break
+                }
+            }
+        }
     }
 
     // MARK: - Player Setup
@@ -528,6 +577,8 @@ enum AudioFunctions {
         bufferingObservation = nil
         readyObservation?.invalidate()
         readyObservation     = nil
+        loadedObservation?.invalidate()
+        loadedObservation    = nil
         isBuffering          = false
 
         activateAudioSession()
@@ -547,8 +598,17 @@ enum AudioFunctions {
             metaMetadata      = metadata
         }
 
-        playerItem = AVPlayerItem(url: url)
-        player     = AVPlayer(playerItem: playerItem)
+        // Explicitly pause and release the outgoing player before creating a new one.
+        // On iOS, AVPlayer instances continue playing even after their Swift reference is
+        // overwritten — unlike Android where GC stops the player. Without this, skipping
+        // tracks or calling SetPlaylist again causes two streams to play simultaneously.
+        player?.pause()
+        player     = nil
+        playerItem = nil
+
+        playerItem     = AVPlayerItem(url: url)
+        player         = AVPlayer(playerItem: playerItem)
+        player?.volume = isDucked ? userVolume * duckFactor : userVolume
 
         refreshNowPlayingInfo()
 
@@ -557,17 +617,15 @@ enum AudioFunctions {
         bufferingObservation = playerItem?.observe(\.isPlaybackBufferEmpty, options: [.new]) { item, _ in
             guard item.isPlaybackBufferEmpty else { return }
             AudioFunctions.isBuffering = true
-            AudioFunctions.sendEvent("PlaybackBuffering", AudioFunctions.withMeta([
-                "url": urlString, "position": AudioFunctions.positionSeconds()
-            ]))
+            AudioFunctions.sendEvent("PlaybackBuffering", [
+                "track": AudioFunctions.trackPayload(), "position": AudioFunctions.positionSeconds()
+            ])
         }
 
         readyObservation = playerItem?.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { item, _ in
             guard item.isPlaybackLikelyToKeepUp else { return }
             AudioFunctions.isBuffering = false
-            AudioFunctions.sendEvent("PlaybackReady", AudioFunctions.withMeta([
-                "url": urlString, "duration": AudioFunctions.durationSeconds()
-            ]))
+            AudioFunctions.sendEvent("PlaybackReady", ["track": AudioFunctions.trackPayload()])
         }
 
         completionObserver = NotificationCenter.default.addObserver(
@@ -575,7 +633,7 @@ enum AudioFunctions {
             object: playerItem, queue: .main
         ) { _ in
             stopProgressTimer()
-            sendEvent("PlaybackCompleted", withMeta(["url": urlString, "duration": durationSeconds()]))
+            sendEvent("PlaybackCompleted", ["track": trackPayload()])
             advancePlaylist()
         }
 
@@ -586,7 +644,7 @@ enum AudioFunctions {
             stopProgressTimer()
             let error = (notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)?
                 .localizedDescription ?? "Unknown error"
-            sendEvent("PlaybackFailed", withMeta(["url": urlString, "error": error]))
+            sendEvent("PlaybackFailed", ["track": trackPayload(), "error": error])
         }
     }
 
@@ -598,6 +656,10 @@ enum AudioFunctions {
                   let url = URL(string: urlString) else {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
+
+            let prevIndex: Int?           = AudioFunctions.playlistIndex >= 0 ? AudioFunctions.playlistIndex : nil
+            let prevPosition: Double      = AudioFunctions.positionSeconds()
+            let prevTrack: [String: Any]? = prevIndex.map { AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: $0)] }
 
             AudioFunctions.playlist      = []
             AudioFunctions.playlistIndex = -1
@@ -614,15 +676,22 @@ enum AudioFunctions {
                                          album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
             AudioFunctions.syncNowPlayingState()
 
-            var loadedPayload: [String: Any] = ["url": urlString]
-            if let t = title    { loadedPayload["title"]    = t }
-            if let a = artist   { loadedPayload["artist"]   = a }
-            if let a = album    { loadedPayload["album"]    = a }
-            if let d = duration { loadedPayload["duration"] = d }
-            if let w = artwork  { loadedPayload["artwork"]  = w }
-            if let c = clip     { loadedPayload["clip"]     = c }
-            if let m = metadata { loadedPayload["metadata"] = m }
-            AudioFunctions.sendEvent("PlaybackLoaded", loadedPayload)
+            var trackChangedPayload: [String: Any] = ["index": 0, "reason": "user_selected", "track": AudioFunctions.trackPayload()]
+            if let pi = prevIndex {
+                trackChangedPayload["lastIndex"]    = pi
+                trackChangedPayload["lastPosition"] = prevPosition
+            }
+            if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
+            AudioFunctions.sendEvent("PlaylistTrackChanged", trackChangedPayload)
+
+            // Defer PlaybackLoaded until AVPlayerItem.status == .readyToPlay, matching Android's
+            // onPrepared behaviour — the caller can safely call resume() when this fires.
+            AudioFunctions.loadedObservation = AudioFunctions.playerItem?.observe(\.status, options: [.new]) { item, _ in
+                guard item.status == .readyToPlay else { return }
+                AudioFunctions.loadedObservation?.invalidate()
+                AudioFunctions.loadedObservation = nil
+                AudioFunctions.sendEvent("PlaybackLoaded", ["track": AudioFunctions.trackPayload()])
+            }
 
             return BridgeResponse.success(data: ["success": true])
         }
@@ -634,6 +703,10 @@ enum AudioFunctions {
                   let url = URL(string: urlString) else {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "URL is required and must be valid.")
             }
+
+            let prevIndex: Int?           = AudioFunctions.playlistIndex >= 0 ? AudioFunctions.playlistIndex : nil
+            let prevPosition: Double      = AudioFunctions.positionSeconds()
+            let prevTrack: [String: Any]? = prevIndex.map { AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: $0)] }
 
             AudioFunctions.playlist      = []
             AudioFunctions.playlistIndex = -1
@@ -654,15 +727,14 @@ enum AudioFunctions {
             AudioFunctions.syncNowPlayingState()
             AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
 
-            var startedPayload: [String: Any] = ["url": urlString, "position": 0.0]
-            if let t = title    { startedPayload["title"]    = t }
-            if let a = artist   { startedPayload["artist"]   = a }
-            if let a = album    { startedPayload["album"]    = a }
-            if let d = duration { startedPayload["duration"] = d }
-            if let w = artwork  { startedPayload["artwork"]  = w }
-            if let c = clip     { startedPayload["clip"]     = c }
-            if let m = metadata { startedPayload["metadata"] = m }
-            AudioFunctions.sendEvent("PlaybackStarted", startedPayload)
+            var trackChangedPayload: [String: Any] = ["index": 0, "reason": "user_selected", "track": AudioFunctions.trackPayload()]
+            if let pi = prevIndex {
+                trackChangedPayload["lastIndex"]    = pi
+                trackChangedPayload["lastPosition"] = prevPosition
+            }
+            if let pt = prevTrack { trackChangedPayload["lastTrack"] = pt }
+            AudioFunctions.sendEvent("PlaylistTrackChanged", trackChangedPayload)
+            AudioFunctions.sendEvent("PlaybackStarted", ["track": AudioFunctions.trackPayload(), "position": 0.0])
 
             return BridgeResponse.success(data: ["success": true])
         }
@@ -670,6 +742,9 @@ enum AudioFunctions {
 
     class Pause: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard AudioFunctions.player != nil, AudioFunctions.player?.rate ?? 0 > 0 else {
+                return BridgeResponse.success(data: ["success": true])
+            }
             AudioFunctions.player?.pause()
             AudioFunctions.stopProgressTimer()
             AudioFunctions.syncNowPlayingState()
@@ -684,7 +759,7 @@ enum AudioFunctions {
             if AudioFunctions.player == nil && !AudioFunctions.playlist.isEmpty && AudioFunctions.playlistIndex >= 0 {
                 let seekTo = AudioFunctions.pendingSeekSeconds
                 AudioFunctions.pendingSeekSeconds = 0
-                AudioFunctions.playTrackAt(index: AudioFunctions.playlistIndex, seekTo: seekTo)
+                AudioFunctions.playTrackAt(index: AudioFunctions.playlistIndex, seekTo: seekTo, reason: "user_selected")
                 return BridgeResponse.success(data: ["success": true])
             }
             AudioFunctions.activateAudioSession()
@@ -706,17 +781,44 @@ enum AudioFunctions {
         }
     }
 
+    class Reset: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let payload = AudioFunctions.statePayload()
+            AudioFunctions.resetPlayer()
+            AudioFunctions.playlist      = []
+            AudioFunctions.playlistIndex = -1
+            AudioFunctions.shuffledOrder = []
+            AudioFunctions.sendEvent("PlaybackStopped", payload)
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
     class Seek: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let seconds  = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
-            let from     = AudioFunctions.positionSeconds()
-            let duration = AudioFunctions.durationSeconds()
+            let seconds = max(0.0, (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0)
+            let from    = AudioFunctions.positionSeconds()
             AudioFunctions.player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)) { _ in
                 AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
                 AudioFunctions.syncNowPlayingState()
-                AudioFunctions.sendEvent("PlaybackSeeked", AudioFunctions.withMeta([
-                    "from": from, "to": seconds, "duration": duration, "url": AudioFunctions.currentURL
-                ]))
+                AudioFunctions.sendEvent("PlaybackSeeked", [
+                    "track": AudioFunctions.trackPayload(), "from": from, "to": seconds
+                ])
+            }
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class SeekBy: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let offset  = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0.0
+            let from    = AudioFunctions.positionSeconds()
+            let target  = max(0.0, from + offset)
+            AudioFunctions.player?.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { _ in
+                AudioFunctions.startProgressTimer(interval: AudioFunctions.progressInterval)
+                AudioFunctions.syncNowPlayingState()
+                AudioFunctions.sendEvent("PlaybackSeeked", [
+                    "track": AudioFunctions.trackPayload(), "from": from, "to": target
+                ])
             }
             return BridgeResponse.success(data: ["success": true])
         }
@@ -725,7 +827,8 @@ enum AudioFunctions {
     class SetVolume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let level = max(0.0, min(1.0, (parameters["level"] as? NSNumber)?.floatValue ?? 1.0))
-            AudioFunctions.player?.volume = level
+            AudioFunctions.userVolume  = level
+            AudioFunctions.player?.volume = AudioFunctions.isDucked ? level * AudioFunctions.duckFactor : level
             return BridgeResponse.success(data: ["success": true])
         }
     }
@@ -769,13 +872,24 @@ enum AudioFunctions {
         }
     }
 
+    class GetProgress: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            return BridgeResponse.success(data: [
+                "position": AudioFunctions.positionSeconds(),
+                "duration": AudioFunctions.durationSeconds(),
+                "buffered": AudioFunctions.bufferedSeconds(),
+            ])
+        }
+    }
+
     class GetState: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            var state: [String: Any] = [
-                "url":           AudioFunctions.currentURL,
+            return BridgeResponse.success(data: [
+                "track":         AudioFunctions.trackPayload(),
                 "position":      AudioFunctions.positionSeconds(),
                 "duration":      AudioFunctions.durationSeconds(),
-                "isPlaying":     AudioFunctions.player?.rate ?? 0 > 0,
+                "buffered":      AudioFunctions.bufferedSeconds(),
+                "isPlaying":     (AudioFunctions.player?.rate ?? 0) > 0,
                 "isBuffering":   AudioFunctions.isBuffering,
                 "hasPlayer":     AudioFunctions.player != nil,
                 "playbackRate":  AudioFunctions.playbackRate,
@@ -784,15 +898,7 @@ enum AudioFunctions {
                 "playlistTotal": AudioFunctions.playlist.count,
                 "repeatMode":    AudioFunctions.repeatMode,
                 "shuffleMode":   AudioFunctions.shuffleMode,
-            ]
-            if let t = AudioFunctions.metaTitle         { state["title"]    = t }
-            if let a = AudioFunctions.metaArtist        { state["artist"]   = a }
-            if let a = AudioFunctions.metaAlbum         { state["album"]    = a }
-            if let d = AudioFunctions.metaDuration      { state["duration"] = d }
-            if let w = AudioFunctions.metaArtworkSource { state["artwork"]  = w }
-            if let m = AudioFunctions.metaMetadata      { state["metadata"] = m }
-
-            return BridgeResponse.success(data: state)
+            ])
         }
     }
 
@@ -841,9 +947,13 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "items must be a non-empty array of track objects.")
             }
 
-            let autoPlay    = parameters["autoPlay"]    as? Bool ?? true
-            let startIndex  = (parameters["startIndex"]  as? NSNumber)?.intValue  ?? 0
+            let autoPlay     = parameters["autoPlay"]     as? Bool ?? true
+            let startIndex   = (parameters["startIndex"]   as? NSNumber)?.intValue    ?? 0
             let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0
+
+            let prevIndex: Int?           = AudioFunctions.playlistIndex >= 0 ? AudioFunctions.playlistIndex : nil
+            let prevPosition: Double      = AudioFunctions.positionSeconds()
+            let prevTrack: [String: Any]? = prevIndex.map { AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: $0)] }
 
             AudioFunctions.playlist      = items
             AudioFunctions.playlistIndex = -1
@@ -854,13 +964,25 @@ enum AudioFunctions {
                 AudioFunctions.shuffledOrder = []
             }
 
-            AudioFunctions.sendEvent("PlaylistSet", ["total": items.count])
+            var playlistSetPayload: [String: Any] = [
+                "startIndex":   startIndex,
+                "autoPlay":     autoPlay,
+                "startSeconds": startSeconds,
+            ]
+            if let pi = prevIndex {
+                playlistSetPayload["lastIndex"]    = pi
+                playlistSetPayload["lastPosition"] = prevPosition
+            }
+            if let pt = prevTrack { playlistSetPayload["lastTrack"] = pt }
+            AudioFunctions.sendEvent("PlaylistSet", playlistSetPayload)
 
             if autoPlay {
-                AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds)
+                AudioFunctions.playTrackAt(index: startIndex, seekTo: startSeconds, reason: "user_selected")
             } else {
-                AudioFunctions.playlistIndex    = startIndex
+                AudioFunctions.playlistIndex      = startIndex
                 AudioFunctions.pendingSeekSeconds = startSeconds
+                // Release any existing player so resume() cold-starts and seeks to startSeconds.
+                AudioFunctions.resetPlayer()
             }
 
             return BridgeResponse.success(data: ["success": true])
@@ -872,10 +994,11 @@ enum AudioFunctions {
             guard !AudioFunctions.playlist.isEmpty else {
                 return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
             }
+            let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0.0
             let nextIndex = AudioFunctions.repeatMode == "all"
                 ? (AudioFunctions.playlistIndex + 1) % AudioFunctions.playlist.count
                 : min(AudioFunctions.playlistIndex + 1, AudioFunctions.playlist.count - 1)
-            AudioFunctions.playTrackAt(index: nextIndex)
+            AudioFunctions.playTrackAt(index: nextIndex, seekTo: startSeconds, reason: "user_next")
             return BridgeResponse.success(data: ["success": true])
         }
     }
@@ -885,8 +1008,56 @@ enum AudioFunctions {
             guard !AudioFunctions.playlist.isEmpty else {
                 return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
             }
-            AudioFunctions.playTrackAt(index: max(0, AudioFunctions.playlistIndex - 1))
+            let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0.0
+            AudioFunctions.playTrackAt(index: max(0, AudioFunctions.playlistIndex - 1), seekTo: startSeconds, reason: "user_previous")
             return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class SkipTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard !AudioFunctions.playlist.isEmpty else {
+                return BridgeResponse.error(code: "NO_PLAYLIST", message: "No playlist is active.")
+            }
+            guard let index = (parameters["index"] as? NSNumber)?.intValue else {
+                return BridgeResponse.error(code: "MISSING_INDEX", message: "Missing index parameter.")
+            }
+            let startSeconds = (parameters["startSeconds"] as? NSNumber)?.doubleValue ?? 0.0
+            guard index >= 0 && index < AudioFunctions.playlist.count else {
+                return BridgeResponse.error(code: "OUT_OF_RANGE", message: "Index out of range.")
+            }
+            AudioFunctions.playTrackAt(index: index, seekTo: startSeconds, reason: "user_selected")
+            return BridgeResponse.success(data: ["success": true])
+        }
+    }
+
+    class GetTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let index = (parameters["index"] as? NSNumber)?.intValue else {
+                return BridgeResponse.error(code: "MISSING_INDEX", message: "Missing index parameter.")
+            }
+            guard index >= 0 && index < AudioFunctions.playlist.count else {
+                return BridgeResponse.error(code: "OUT_OF_RANGE", message: "Index out of range.")
+            }
+            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: index)]])
+        }
+    }
+
+    class GetActiveTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let idx = AudioFunctions.playlistIndex
+            guard idx >= 0 && idx < AudioFunctions.playlist.count else {
+                return BridgeResponse.success(data: ["track": NSNull()])
+            }
+            return BridgeResponse.success(data: ["track": AudioFunctions.playlist[AudioFunctions.effectivePlaylistIndex(for: idx)]])
+        }
+    }
+
+    class GetActiveTrackIndex: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let idx = AudioFunctions.playlistIndex
+            let index: Any = (idx >= 0 && idx < AudioFunctions.playlist.count) ? idx : NSNull()
+            return BridgeResponse.success(data: ["index": index])
         }
     }
 
@@ -966,19 +1137,63 @@ enum AudioFunctions {
                 return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "index is out of range.")
             }
             AudioFunctions.playlist.remove(at: index)
-            // Rebuild shuffled order removing any reference to removed index and shifting higher indices down.
             if AudioFunctions.shuffleMode {
                 AudioFunctions.shuffledOrder = AudioFunctions.shuffledOrder
                     .filter { $0 != index }
                     .map { $0 > index ? $0 - 1 : $0 }
             }
-            // Adjust playlistIndex if needed.
             if AudioFunctions.playlistIndex > index {
                 AudioFunctions.playlistIndex -= 1
             } else if AudioFunctions.playlistIndex == index {
                 AudioFunctions.playlistIndex = -1
             }
             return BridgeResponse.success(data: ["success": true, "total": AudioFunctions.playlist.count])
+        }
+    }
+
+    class RemoveUpcomingTracks: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let idx = AudioFunctions.playlistIndex
+            if idx >= 0 && idx + 1 < AudioFunctions.playlist.count {
+                let removeFrom = idx + 1
+                AudioFunctions.playlist.removeSubrange(removeFrom...)
+                if AudioFunctions.shuffleMode {
+                    AudioFunctions.shuffledOrder = AudioFunctions.shuffledOrder.filter { $0 < removeFrom }
+                }
+            }
+            return BridgeResponse.success(data: ["success": true, "total": AudioFunctions.playlist.count])
+        }
+    }
+
+    class MoveTrack: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            guard let fromIndex = (parameters["fromIndex"] as? NSNumber)?.intValue,
+                  let toIndex   = (parameters["toIndex"]   as? NSNumber)?.intValue else {
+                return BridgeResponse.error(code: "INVALID_PARAMETERS", message: "fromIndex and toIndex are required.")
+            }
+            let count = AudioFunctions.playlist.count
+            guard fromIndex >= 0, fromIndex < count, toIndex >= 0, toIndex < count else {
+                return BridgeResponse.error(code: "OUT_OF_RANGE", message: "Index out of range.")
+            }
+            if fromIndex == toIndex { return BridgeResponse.success(data: ["success": true]) }
+
+            let track = AudioFunctions.playlist.remove(at: fromIndex)
+            AudioFunctions.playlist.insert(track, at: toIndex)
+
+            let cur = AudioFunctions.playlistIndex
+            if cur == fromIndex {
+                AudioFunctions.playlistIndex = toIndex
+            } else if fromIndex < toIndex && cur > fromIndex && cur <= toIndex {
+                AudioFunctions.playlistIndex -= 1
+            } else if toIndex < fromIndex && cur >= toIndex && cur < fromIndex {
+                AudioFunctions.playlistIndex += 1
+            }
+
+            if AudioFunctions.shuffleMode && !AudioFunctions.shuffledOrder.isEmpty {
+                AudioFunctions.shuffledOrder = Array(0..<AudioFunctions.playlist.count).shuffled()
+            }
+
+            return BridgeResponse.success(data: ["success": true])
         }
     }
 }

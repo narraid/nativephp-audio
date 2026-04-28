@@ -4,20 +4,51 @@ namespace Narraid\Audio;
 
 class Audio
 {
+    // ── Internal Helpers ──────────────────────────────────────────────────────
+
+    private function call(string $method, array $params = []): bool
+    {
+        if (! function_exists('nativephp_call')) return false;
+        $result  = nativephp_call($method, empty($params) ? '{}' : json_encode($params));
+        $decoded = json_decode($result ?? '{}', true);
+        return (bool) ($decoded['success'] ?? false);
+    }
+
+    private function query(string $method, array $params = []): ?array
+    {
+        if (! function_exists('nativephp_call')) return null;
+        $result  = nativephp_call($method, empty($params) ? '{}' : json_encode($params));
+        $decoded = json_decode($result ?? '', true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function trackParams(
+        string $url,
+        ?string $title,
+        ?string $artist,
+        ?string $album,
+        ?string $artwork,
+        ?float $duration,
+        ?string $clip,
+        ?array $metadata,
+    ): array {
+        return array_filter([
+            'url'      => $url,
+            'title'    => $title,
+            'artist'   => $artist,
+            'album'    => $album,
+            'artwork'  => $artwork,
+            'duration' => $duration,
+            'clip'     => $clip,
+            'metadata' => $metadata,
+        ], fn ($v) => $v !== null);
+    }
+
+    // ── Single-track ──────────────────────────────────────────────────────────
+
     /**
-     * Load an audio file without starting playback.
-     * The audio is prepared and ready to play via resume().
-     * Fires PlaybackLoaded once ready, PlaybackBuffering while fetching,
-     * and PlaybackReady when enough data is buffered.
-     *
-     * @param  string       $url      URL or local path of the audio file
-     * @param  string|null  $title    Track title
-     * @param  string|null  $artist   Artist name
-     * @param  string|null  $album    Album name
-     * @param  string|null  $artwork  URL or local path to artwork image
-     * @param  float|null   $duration Total track duration in seconds
-     * @param  string|null  $clip     URL or local path to a short audio preview/clip
-     * @param  array|null   $metadata Arbitrary key/value pairs passed through to native events
+     * Prepare a track without starting playback.
+     * Fires PlaybackLoaded when ready; call resume() to start.
      */
     public function load(
         string $url,
@@ -29,44 +60,12 @@ class Audio
         ?string $clip = null,
         ?array $metadata = null,
     ): bool {
-        if (function_exists('nativephp_call')) {
-            $params = array_filter([
-                'url'      => $url,
-                'title'    => $title,
-                'artist'   => $artist,
-                'album'    => $album,
-                'artwork'  => $artwork,
-                'duration' => $duration,
-                'clip'     => $clip,
-                'metadata' => $metadata,
-            ], fn ($v) => $v !== null);
-
-            $result = nativephp_call('Audio.load', json_encode($params));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.load', $this->trackParams($url, $title, $artist, $album, $artwork, $duration, $clip, $metadata));
     }
 
     /**
-     * Play an audio file from a URL or local path.
-     * Optionally pass track metadata so PlaybackStarted fires with a complete payload
-     * and the lock screen / Bluetooth controls are populated immediately.
-     * Fires PlaybackBuffering while fetching and PlaybackReady when buffered.
-     *
-     * @param  string       $url      URL or local path of the audio file
-     * @param  string|null  $title    Track title
-     * @param  string|null  $artist   Artist name
-     * @param  string|null  $album    Album name
-     * @param  string|null  $artwork  URL or local path to artwork image
-     * @param  float|null   $duration Total track duration in seconds
-     * @param  string|null  $clip     URL or local path to a short audio preview/clip
-     * @param  array|null   $metadata Arbitrary key/value pairs passed through to native events
+     * Load and immediately start playing a track.
+     * Fires PlaybackStarted once playback begins.
      */
     public function play(
         string $url,
@@ -78,271 +77,92 @@ class Audio
         ?string $clip = null,
         ?array $metadata = null,
     ): bool {
-        if (function_exists('nativephp_call')) {
-            $params = array_filter([
-                'url'      => $url,
-                'title'    => $title,
-                'artist'   => $artist,
-                'album'    => $album,
-                'artwork'  => $artwork,
-                'duration' => $duration,
-                'clip'     => $clip,
-                'metadata' => $metadata,
-            ], fn ($v) => $v !== null);
-
-            $result = nativephp_call('Audio.play', json_encode($params));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.play', $this->trackParams($url, $title, $artist, $album, $artwork, $duration, $clip, $metadata));
     }
 
-    /**
-     * Pause the current audio playback
-     */
-    public function pause(): bool
-    {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.pause', '{}');
+    public function pause():  bool { return $this->call('Audio.pause'); }
+    public function resume(): bool { return $this->call('Audio.resume'); }
+    public function stop():   bool { return $this->call('Audio.stop'); }
 
-            if ($result) {
-                $decoded = json_decode($result, true);
+    /** Stop playback and clear the active playlist and all player state. */
+    public function reset(): bool { return $this->call('Audio.reset'); }
 
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Resume the paused audio playback
-     */
-    public function resume(): bool
-    {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.resume', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Stop the audio playback and reset the position
-     */
-    public function stop(): bool
-    {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.stop', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Seek to a specific position in the audio (in seconds)
-     *
-     * @param  float  $seconds  Target position in seconds (must be >= 0)
-     */
+    /** Seek to an absolute position in seconds (clamped to >= 0). */
     public function seek(float $seconds): bool
     {
-        $seconds = max(0.0, $seconds);
-
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.seek', json_encode(['seconds' => $seconds]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.seek', ['seconds' => max(0.0, $seconds)]);
     }
 
-    /**
-     * Set the audio volume
-     *
-     * @param  float  $level  Volume level from 0.0 (mute) to 1.0 (maximum)
-     */
+    /** Seek relative to the current position. Negative values seek backward. */
+    public function seekBy(float $seconds): bool
+    {
+        return $this->call('Audio.seekBy', ['seconds' => $seconds]);
+    }
+
+    /** @param float $level Volume from 0.0 (mute) to 1.0 (max). */
     public function setVolume(float $level): bool
     {
-        $level = max(0.0, min(1.0, $level));
-
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setVolume', json_encode(['level' => $level]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.setVolume', ['level' => max(0.0, min(1.0, $level))]);
     }
 
-    /**
-     * Set the playback speed.
-     * On Android this requires API 23+; on older versions the rate is stored but not applied.
-     *
-     * @param  float  $rate  Speed multiplier. 1.0 = normal, 0.5 = half speed, 2.0 = double speed.
-     *                       Clamped to the range [0.25, 4.0] by the native layer.
-     */
+    /** @param float $rate Speed multiplier, clamped to [0.25, 4.0]. */
     public function setPlaybackRate(float $rate): bool
     {
-        $rate = max(0.25, min(4.0, $rate));
-
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setPlaybackRate', json_encode(['rate' => $rate]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.setPlaybackRate', ['rate' => max(0.25, min(4.0, $rate))]);
     }
 
-    /**
-     * Set how often PlaybackProgressUpdated events fire.
-     *
-     * @param  float  $seconds  Interval in seconds. Clamped to [0.5, 60.0] by the native layer.
-     */
+    /** @param float $seconds Interval between PlaybackProgressUpdated events, clamped to [0.5, 60]. */
     public function setProgressInterval(float $seconds): bool
     {
-        $seconds = max(0.5, min(60.0, $seconds));
-
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setProgressInterval', json_encode(['seconds' => $seconds]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.setProgressInterval', ['seconds' => max(0.5, min(60.0, $seconds))]);
     }
 
-    /**
-     * Get the duration of the current audio in seconds
-     */
+    // ── Getters ───────────────────────────────────────────────────────────────
+
     public function getDuration(): ?float
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.getDuration', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return isset($decoded['duration']) ? (float) $decoded['duration'] : null;
-            }
-        }
-
-        return null;
+        $r = $this->query('Audio.getDuration');
+        return isset($r['duration']) ? (float) $r['duration'] : null;
     }
 
-    /**
-     * Get the current playback position in seconds
-     */
     public function getCurrentPosition(): ?float
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.getCurrentPosition', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return isset($decoded['position']) ? (float) $decoded['position'] : null;
-            }
-        }
-
-        return null;
+        $r = $this->query('Audio.getCurrentPosition');
+        return isset($r['position']) ? (float) $r['position'] : null;
     }
 
     /**
-     * Get the full current playback state from the native audio layer.
-     *
-     * Returns an associative array with keys:
-     *   url, position, duration, isPlaying, isBuffering, hasPlayer, playbackRate,
-     *   hasPlaylist, playlistIndex, playlistTotal, repeatMode, shuffleMode,
-     *   title, artist, album, artwork, metadata
-     *
-     * Returns null when not running inside a NativePHP app or the call fails.
+     * Get position, duration, and buffered seconds in one call.
+     * Returns ['position' => float, 'duration' => float, 'buffered' => float] or null.
+     */
+    public function getProgress(): ?array
+    {
+        return $this->query('Audio.getProgress');
+    }
+
+    /**
+     * Get the full playback state: track, position, duration, buffered,
+     * isPlaying, isBuffering, hasPlayer, playbackRate, playlist info, and modes.
      */
     public function getState(): ?array
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.getState', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return is_array($decoded) ? $decoded : null;
-            }
-        }
-
-        return null;
+        return $this->query('Audio.getState');
     }
 
     /**
-     * Drain all events that were queued while the app was in the background.
-     *
-     * Events are stored natively when PHP cannot safely receive them (background mode).
-     * Call this when the app returns to the foreground — typically in a Livewire component's
-     * mount() or a dedicated resume hook — to replay everything that was missed.
-     *
-     * Each item in the returned array has the shape:
-     *   ['event' => 'EventName', 'payload' => [...]]
+     * Drain events queued while the app was in the background.
+     * Each item has shape ['event' => string, 'payload' => array].
      *
      * @return array[]
      */
     public function drainEvents(): array
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.drainEvents', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return $decoded['events'] ?? [];
-            }
-        }
-
-        return [];
+        return $this->query('Audio.drainEvents')['events'] ?? [];
     }
 
-    /**
-     * Set track metadata for display on lock screens, Bluetooth devices, and OS media centers.
-     *
-     * @param  string       $title    Track title
-     * @param  string|null  $artist   Artist name
-     * @param  string|null  $album    Album name
-     * @param  string|null  $artwork  URL or local path to artwork image
-     * @param  float|null   $duration Total track duration in seconds
-     */
+    // ── Metadata ──────────────────────────────────────────────────────────────
+
+    /** Update lock screen / Bluetooth metadata without restarting playback. */
     public function setMetadata(
         string $title,
         ?string $artist = null,
@@ -351,234 +171,118 @@ class Audio
         ?float $duration = null,
         ?array $metadata = null,
     ): bool {
-        if (function_exists('nativephp_call')) {
-            $params = array_filter([
-                'title'    => $title,
-                'artist'   => $artist,
-                'album'    => $album,
-                'artwork'  => $artwork,
-                'duration' => $duration,
-                'metadata' => $metadata,
-            ], fn ($v) => $v !== null);
-
-            $result = nativephp_call('Audio.setMetadata', json_encode($params));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.setMetadata', array_filter([
+            'title'    => $title,
+            'artist'   => $artist,
+            'album'    => $album,
+            'artwork'  => $artwork,
+            'duration' => $duration,
+            'metadata' => $metadata,
+        ], fn ($v) => $v !== null));
     }
 
+    // ── Playlist ──────────────────────────────────────────────────────────────
+
     /**
-     * Set the playlist queue natively so tracks auto-advance in the background on both iOS and Android.
-     *
-     * Each item in $items must have a 'url' key. Optional keys per item:
-     *   title, artist, album, artwork, duration, clip, metadata
-     *
-     * @param  array  $items        Array of track objects
-     * @param  bool   $autoPlay     Start playing immediately (default true)
-     * @param  int    $startIndex   Index of the track to start from (default 0)
-     * @param  int    $seconds      Position in seconds to seek to on the starting track (default 0)
+     * Replace the queue and optionally start playing.
+     * Each item in $items must have a 'url' key.
      */
-    public function setPlaylist(array $items, bool $autoPlay = true, int $startIndex = 0, int $seconds = 0): bool
+    public function setPlaylist(
+        array $items,
+        bool $autoPlay = true,
+        int $startIndex = 0,
+        float $startSeconds = 0.0,
+    ): bool {
+        return $this->call('Audio.setPlaylist', compact('items', 'autoPlay', 'startIndex', 'startSeconds'));
+    }
+
+    public function nextTrack(float $startSeconds = 0.0): bool
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setPlaylist', json_encode([
-                'items'        => $items,
-                'autoPlay'     => $autoPlay,
-                'startIndex'   => $startIndex,
-                'startSeconds' => $seconds,
-            ]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.nextTrack', ['startSeconds' => $startSeconds]);
     }
 
-    /**
-     * Skip to the next track in the active playlist
-     */
-    public function nextTrack(): bool
+    public function previousTrack(float $startSeconds = 0.0): bool
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.nextTrack', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.previousTrack', ['startSeconds' => $startSeconds]);
     }
 
-    /**
-     * Skip to the previous track in the active playlist
-     */
-    public function previousTrack(): bool
+    public function skipTrack(int $index, float $startSeconds = 0.0): bool
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.previousTrack', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.skipTrack', compact('index', 'startSeconds'));
     }
 
-    /**
-     * Get the current playlist state.
-     *
-     * Returns an associative array with keys:
-     *   items, index, total, repeatMode, shuffleMode
-     */
+    /** Move a track from one queue position to another. */
+    public function moveTrack(int $fromIndex, int $toIndex): bool
+    {
+        return $this->call('Audio.moveTrack', compact('fromIndex', 'toIndex'));
+    }
+
+    /** Append a single track to the end of the active queue. Track must have a 'url' key. */
+    public function appendTrack(array $track): bool
+    {
+        return $this->call('Audio.appendTrack', compact('track'));
+    }
+
+    public function removeTrack(int $index): bool
+    {
+        return $this->call('Audio.removeTrack', compact('index'));
+    }
+
+    /** Remove all tracks after the currently playing track. */
+    public function removeUpcomingTracks(): bool
+    {
+        return $this->call('Audio.removeUpcomingTracks');
+    }
+
+    public function getTrack(int $index): ?array
+    {
+        $r = $this->query('Audio.getTrack', compact('index'));
+        return isset($r['track']) && is_array($r['track']) ? $r['track'] : null;
+    }
+
+    public function getActiveTrack(): ?array
+    {
+        $r = $this->query('Audio.getActiveTrack');
+        return isset($r['track']) && is_array($r['track']) ? $r['track'] : null;
+    }
+
+    public function getActiveTrackIndex(): ?int
+    {
+        $r = $this->query('Audio.getActiveTrackIndex');
+        return isset($r['index']) ? (int) $r['index'] : null;
+    }
+
     public function getPlaylist(): ?array
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.getPlaylist', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return is_array($decoded) ? $decoded : null;
-            }
-        }
-
-        return null;
+        return $this->query('Audio.getPlaylist');
     }
 
-    /**
-     * Set the repeat mode for the active playlist.
-     *
-     * @param  string  $mode  'none' (default), 'one' (repeat current track), 'all' (repeat playlist)
-     */
+    // ── Queue Settings ────────────────────────────────────────────────────────
+
+    /** @param string $mode 'none' | 'one' | 'all' */
     public function setRepeatMode(string $mode): bool
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setRepeatMode', json_encode(['mode' => $mode]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.setRepeatMode', compact('mode'));
     }
 
-    /**
-     * Enable or disable shuffle mode for the active playlist.
-     *
-     * @param  bool  $shuffle  true to shuffle, false to play in order
-     */
     public function setShuffleMode(bool $shuffle): bool
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setShuffleMode', json_encode(['shuffle' => $shuffle]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.setShuffleMode', compact('shuffle'));
     }
 
+    // ── Sleep Timer ───────────────────────────────────────────────────────────
+
     /**
-     * Schedule playback to stop after a number of minutes.
-     * Fires PlaybackStopped and SleepTimerExpired when it triggers.
-     *
-     * @param  float  $minutes  Minutes until playback stops (must be > 0)
+     * Schedule playback to stop after $minutes minutes (must be > 0).
+     * Fires PlaybackStopped then SleepTimerExpired when triggered.
      */
     public function setSleepTimer(float $minutes): bool
     {
-        $minutes = max(0.0, $minutes);
-
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.setSleepTimer', json_encode(['minutes' => $minutes]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.setSleepTimer', ['minutes' => max(0.0, $minutes)]);
     }
 
-    /**
-     * Cancel an active sleep timer before it fires.
-     */
     public function cancelSleepTimer(): bool
     {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.cancelSleepTimer', '{}');
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Append a track to the end of the active playlist.
-     *
-     * @param  array  $track  Track object with at least a 'url' key
-     */
-    public function appendTrack(array $track): bool
-    {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.appendTrack', json_encode(['track' => $track]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Remove a track from the active playlist by index.
-     *
-     * @param  int  $index  Zero-based index of the track to remove
-     */
-    public function removeTrack(int $index): bool
-    {
-        if (function_exists('nativephp_call')) {
-            $result = nativephp_call('Audio.removeTrack', json_encode(['index' => $index]));
-
-            if ($result) {
-                $decoded = json_decode($result, true);
-
-                return (bool) ($decoded['success'] ?? false);
-            }
-        }
-
-        return false;
+        return $this->call('Audio.cancelSleepTimer');
     }
 }

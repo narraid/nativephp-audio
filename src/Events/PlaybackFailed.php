@@ -10,9 +10,8 @@ class PlaybackFailed
     use Dispatchable, SerializesModels;
 
     public function __construct(
-        public string $url,
+        public array $track,
         public string $error,
-        public ?array $metadata = null,
     ) {
     }
 }

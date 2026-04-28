@@ -10,14 +10,7 @@ class PlaybackLoaded
     use Dispatchable, SerializesModels;
 
     public function __construct(
-        public string $url,
-        public ?string $title = null,
-        public ?string $artist = null,
-        public ?string $album = null,
-        public ?float $duration = null,
-        public ?string $artwork = null,
-        public ?string $clip = null,
-        public ?array $metadata = null,
+        public array $track,
     ) {
     }
 }
