@@ -12,8 +12,9 @@ class PlaybackStopped
     public function __construct(
         public array $track,
         public float $position,
-        public bool $isBuffering,
-        public bool $isPlaying,
+        public float $buffered = 0.0,
+        public bool $isBuffering = false,
+        public bool $isPlaying = false,
     ) {
     }
 }
