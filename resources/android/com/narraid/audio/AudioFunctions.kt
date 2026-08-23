@@ -715,7 +715,7 @@ class AudioFunctions {
             }
         }
 
-        private fun releasePlayer() {
+        internal fun releasePlayer() {
             isBuffering      = false
             bufferingPercent = 0
             cancelSleepTimer()
