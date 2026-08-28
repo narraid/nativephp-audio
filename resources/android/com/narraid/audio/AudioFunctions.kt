@@ -323,12 +323,22 @@ class AudioFunctions {
 
         // ── Playback Rate ─────────────────────────────────────────────────────
 
+        /**
+         * Push [playbackRate] onto the player. Applies 1.0f as readily as any other
+         * speed: skipping it would strand the player on whatever speed was set last.
+         */
         private fun applyPlaybackRate() {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && playbackRate != 1.0f) {
-                try {
-                    mediaPlayer?.playbackParams = PlaybackParams().setSpeed(playbackRate)
-                } catch (_: Exception) { /* not all streams support rate changes */ }
-            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+
+            val player = mediaPlayer ?: return
+
+            try {
+                if (player.playbackParams.speed == playbackRate) return
+            } catch (_: Exception) { /* params aren't readable yet - set them below */ }
+
+            try {
+                player.playbackParams = PlaybackParams().setSpeed(playbackRate)
+            } catch (_: Exception) { /* not all streams support rate changes */ }
         }
 
         // ── Audio Focus ───────────────────────────────────────────────────────
@@ -715,7 +725,7 @@ class AudioFunctions {
             }
         }
 
-        private fun releasePlayer() {
+        internal fun releasePlayer() {
             isBuffering      = false
             bufferingPercent = 0
             cancelSleepTimer()
@@ -844,7 +854,12 @@ class AudioFunctions {
             val rate = JSONObject(parameters).optDouble("rate", 1.0)
                 .coerceIn(0.25, 4.0).toFloat()
             playbackRate = rate
-            applyPlaybackRate()
+
+            // Assigning playbackParams starts a paused player, so a paused one keeps
+            // the stored rate and picks it up from the applyPlaybackRate() that runs
+            // alongside its next start().
+            if (mediaPlayer?.isPlaying == true) applyPlaybackRate()
+
             updateSessionState()
             return mapOf("success" to true, "rate" to rate)
         }

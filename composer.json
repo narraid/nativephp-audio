@@ -1,12 +1,12 @@
 {
     "name": "narraid/nativephp-audio",
     "description": "Audio player plugin for NativePHP",
-    "version": "6.1.0",
+    "version": "7.0.4",
     "type": "nativephp-plugin",
     "license": "MIT",
     "require": {
-        "php": "^8.5",
-        "nativephp/mobile": "^3.0",
+        "php": "^8.4",
+        "nativephp/mobile": "^3.0|^4.0",
         "illuminate/support": "^11.0|^12.0|^13.0"
     },
     "autoload": {
