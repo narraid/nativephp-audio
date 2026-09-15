@@ -1,3 +1,15 @@
+## 🎵 NativePHP Audio Player v7.1.0
+
+### Fixes
+- **iOS**: Events no longer queue forever after opening Control Center, the notification shade or a call banner. The background queue is now used only after `didEnterBackground`, and is released on `willEnterForeground` / `didBecomeActive` (previously set on `willResignActive`, which returning from those overlays never undid — the player UI froze until a real background cycle).
+- **iOS / Android**: Remote "next" (lock screen, headset, notification) on the last track with repeat off no longer restarts that track — it does nothing.
+- **Android**: Events sent while no activity is available are queued instead of silently dropped.
+- **iOS / Android**: The background event queue is thread-safe.
+
+### Changes
+- **Every event payload now includes `at`** — epoch milliseconds when the engine emitted it, on live and queued events alike. All PHP event classes accept an optional `?int $at`, so existing listeners are unaffected. Use it to timestamp events replayed by `Audio::drainEvents()`.
+- **Background queue is bounded**: a `PlaybackProgressUpdated` queued directly after another replaces it (the `at` values keep the elapsed time), and the queue holds at most 5000 events.
+
 ## 🚧 Coming Soon (v1.1.0)
 
 - **MediaSession Support**: Full track metadata (artist, title, album, etc.) on Bluetooth devices and OS media controls.

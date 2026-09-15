@@ -12,6 +12,8 @@ class PlaybackBuffering
     public function __construct(
         public array $track,
         public float $position,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }
