@@ -741,11 +741,23 @@ enum AudioFunctions {
 
             // Defer PlaybackLoaded until AVPlayerItem.status == .readyToPlay, matching Android's
             // onPrepared behaviour — the caller can safely call resume() when this fires.
-            AudioFunctions.loadedObservation = AudioFunctions.playerItem?.observe(\.status, options: [.new]) { item, _ in
-                guard item.status == .readyToPlay else { return }
+``            var loadedSent = false
+            let fireLoaded = {
+                guard !loadedSent else { return }
+                loadedSent = true
                 AudioFunctions.loadedObservation?.invalidate()
                 AudioFunctions.loadedObservation = nil
                 AudioFunctions.sendEvent("PlaybackLoaded", ["track": AudioFunctions.trackPayload()])
+            }
+            AudioFunctions.loadedObservation = AudioFunctions.playerItem?.observe(\.status, options: [.new]) { item, _ in
+                guard item.status == .readyToPlay else { return }
+                fireLoaded()
+            }
+            // A local file (or an already-cached stream) can reach .readyToPlay before the
+            // observer above attaches, in which case KVO never fires and PlaybackLoaded would
+            // be lost. Emit it immediately so load() callers are never left waiting.
+            if AudioFunctions.playerItem?.status == .readyToPlay {
+                fireLoaded()
             }
 
             return BridgeResponse.success(data: ["success": true])
@@ -1146,8 +1158,20 @@ enum AudioFunctions {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let shuffle = parameters["shuffle"] as? Bool ?? false
             AudioFunctions.shuffleMode = shuffle
-            if shuffle, !AudioFunctions.playlist.isEmpty {
-                AudioFunctions.shuffledOrder = Array(0..<AudioFunctions.playlist.count).shuffled()
+            let count = AudioFunctions.playlist.count
+            if shuffle, count > 0 {
+                // Keep the currently playing track at its logical position and shuffle
+                // everything around it. Re-shuffling the whole list would silently point
+                // getActiveTrack() and auto-advance at a different physical track.
+                let current = AudioFunctions.effectivePlaylistIndex(for: AudioFunctions.playlistIndex)
+                if current >= 0, current < count {
+                    var others = Array(0..<count).filter { $0 != current }.shuffled()
+                    let slot = min(max(0, AudioFunctions.playlistIndex), count - 1)
+                    others.insert(current, at: slot)
+                    AudioFunctions.shuffledOrder = others
+                } else {
+                    AudioFunctions.shuffledOrder = Array(0..<count).shuffled()
+                }
             } else {
                 AudioFunctions.shuffledOrder = []
             }

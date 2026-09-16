@@ -1165,8 +1165,18 @@ class AudioFunctions {
             val shuffle = JSONObject(parameters).optBoolean("shuffle", false)
             shuffleMode = shuffle
             if (shuffle && playlist.isNotEmpty()) {
+                // Keep the currently playing track at its logical position and shuffle
+                // everything around it. Re-shuffling the whole list would silently point
+                // getActiveTrack() and auto-advance at a different physical track.
+                val current = effectiveTrackIndex(playlistIndex)
                 shuffledOrder.clear()
-                shuffledOrder.addAll((0 until playlist.size).toMutableList().also { it.shuffle() })
+                if (current in 0 until playlist.size) {
+                    val others = (0 until playlist.size).filter { it != current }.toMutableList().also { it.shuffle() }
+                    others.add(playlistIndex.coerceIn(0, playlist.size - 1), current)
+                    shuffledOrder.addAll(others)
+                } else {
+                    shuffledOrder.addAll((0 until playlist.size).toMutableList().also { it.shuffle() })
+                }
             } else {
                 shuffledOrder.clear()
             }
