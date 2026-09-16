@@ -68,16 +68,56 @@ enum AudioFunctions {
     private static var isInBackground = false
     private static var pendingEvents: [[String: Any]] = []
 
+    /// Guards `isInBackground` and `pendingEvents`: events are sent from the main
+    /// queue, AVFoundation KVO callbacks and seek completion handlers alike.
+    private static let eventQueueLock = NSLock()
+
+    /// Upper bound on queued events, so a very long background session can't grow memory without limit.
+    private static let maxPendingEvents = 5000
+
     // MARK: - Event Helpers
 
     private static let eventPrefix = "Narraid\\Audio\\Events\\"
 
     private static func sendEvent(_ name: String, _ payload: [String: Any]) {
-        guard !isInBackground else {
-            pendingEvents.append(["event": name, "payload": payload])
+        // Every event carries its own time (epoch ms), so PHP can place events
+        // replayed from the background queue at the moment they happened.
+        var stamped = payload
+        stamped["at"] = Int64(Date().timeIntervalSince1970 * 1000)
+
+        eventQueueLock.lock()
+        if isInBackground {
+            queueEvent(name, stamped)
+            eventQueueLock.unlock()
             return
         }
-        LaravelBridge.shared.send?(eventPrefix + name, payload)
+        eventQueueLock.unlock()
+
+        LaravelBridge.shared.send?(eventPrefix + name, stamped)
+    }
+
+    /// Caller holds `eventQueueLock`. A progress event replaces a progress event
+    /// queued right before it — PHP measures the gap between the two `at` values,
+    /// so no listening time is lost — and the queue is capped.
+    private static func queueEvent(_ name: String, _ payload: [String: Any]) {
+        if name == "PlaybackProgressUpdated",
+           let last = pendingEvents.last,
+           last["event"] as? String == "PlaybackProgressUpdated" {
+            pendingEvents[pendingEvents.count - 1] = ["event": name, "payload": payload]
+            return
+        }
+
+        if pendingEvents.count >= maxPendingEvents {
+            pendingEvents.removeFirst()
+        }
+
+        pendingEvents.append(["event": name, "payload": payload])
+    }
+
+    private static func setInBackground(_ value: Bool) {
+        eventQueueLock.lock()
+        isInBackground = value
+        eventQueueLock.unlock()
     }
 
     private static func trackPayload() -> [String: Any] {
@@ -140,15 +180,28 @@ enum AudioFunctions {
         guard !backgroundObserversRegistered else { return }
         backgroundObserversRegistered = true
 
+        // Queue only while actually backgrounded. willResignActive also fires for
+        // Control Center, the notification shade and call banners, and coming back
+        // from those posts didBecomeActive but never willEnterForeground — the flag
+        // stayed set and every event queued until a real background/foreground
+        // cycle, freezing the player UI.
         NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
+            forName: UIApplication.didEnterBackgroundNotification,
             object: nil, queue: .main
-        ) { _ in isInBackground = true }
+        ) { _ in setInBackground(true) }
 
+        // app-lifecycle sends AppForegrounded (whose handler drains the queue) on
+        // willEnterForeground, so events from here on go live and reach PHP after
+        // it — in order. didBecomeActive is the safety net.
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil, queue: .main
-        ) { _ in isInBackground = false }
+        ) { _ in setInBackground(false) }
+
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { _ in setInBackground(false) }
     }
 
     // MARK: - Audio Session
@@ -423,10 +476,12 @@ enum AudioFunctions {
         center.nextTrackCommand.isEnabled = true
         center.nextTrackCommand.addTarget { _ in
             if !playlist.isEmpty {
-                let nextIndex = repeatMode == "all"
-                    ? (playlistIndex + 1) % playlist.count
-                    : min(playlistIndex + 1, playlist.count - 1)
-                playTrackAt(index: nextIndex, reason: "user_next")
+                // On the last track with repeat off there is nothing next — a
+                // headset or lock-screen "next" used to restart the last track.
+                if playlistIndex + 1 >= playlist.count && repeatMode != "all" {
+                    return .noActionableNowPlayingItem
+                }
+                playTrackAt(index: (playlistIndex + 1) % playlist.count, reason: "user_next")
             }
             sendEvent("RemoteNextTrackReceived", statePayload())
             return .success
@@ -904,8 +959,10 @@ enum AudioFunctions {
 
     class DrainEvents: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            AudioFunctions.eventQueueLock.lock()
             let events = AudioFunctions.pendingEvents
             AudioFunctions.pendingEvents = []
+            AudioFunctions.eventQueueLock.unlock()
             return BridgeResponse.success(data: ["events": events])
         }
     }

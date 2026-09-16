@@ -50,6 +50,9 @@ class AudioFunctions {
         private var isInBackground = false
         private val pendingEvents: MutableList<Map<String, Any>> = mutableListOf()
 
+        /** Upper bound on queued events, so a very long background session can't grow memory without limit. */
+        private const val MAX_PENDING_EVENTS = 5000
+
         // ── Audio Focus ───────────────────────────────────────────────────────
         private const val DUCK_FACTOR = 0.2f
         private var audioManager: AudioManager? = null
@@ -103,17 +106,49 @@ class AudioFunctions {
         private const val EVENT_PREFIX = "Narraid\\Audio\\Events\\"
 
         internal fun sendEvent(name: String, payload: Map<String, Any>) {
-            if (isInBackground) {
-                pendingEvents.add(mapOf("event" to name, "payload" to payload))
+            // Every event carries its own time (epoch ms), so PHP can place events
+            // replayed from the background queue at the moment they happened.
+            val stamped: Map<String, Any> = payload + ("at" to System.currentTimeMillis())
+
+            val activity = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
+
+            // Queue while backgrounded — and when there is no live activity to
+            // deliver to, which used to drop the event (a lost pause or completion).
+            if (isInBackground || activity == null) {
+                queueEvent(name, stamped)
                 return
             }
-            val activity = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
-                ?: return
-            val json = JSONObject(payload).toString()
+
+            val json = JSONObject(stamped).toString()
             Handler(Looper.getMainLooper()).post {
                 val act = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
-                    ?: return@post
+                if (act == null) {
+                    queueEvent(name, stamped)
+                    return@post
+                }
                 NativeActionCoordinator.dispatchEvent(act, EVENT_PREFIX + name, json)
+            }
+        }
+
+        /**
+         * A progress event replaces a progress event queued right before it — PHP
+         * measures the gap between the two `at` values, so no listening time is
+         * lost — and the queue is capped.
+         */
+        private fun queueEvent(name: String, payload: Map<String, Any>) {
+            val event = mapOf("event" to name, "payload" to payload)
+
+            synchronized(pendingEvents) {
+                if (name == "PlaybackProgressUpdated" && pendingEvents.lastOrNull()?.get("event") == "PlaybackProgressUpdated") {
+                    pendingEvents[pendingEvents.size - 1] = event
+                    return
+                }
+
+                if (pendingEvents.size >= MAX_PENDING_EVENTS) {
+                    pendingEvents.removeAt(0)
+                }
+
+                pendingEvents.add(event)
             }
         }
 
@@ -224,11 +259,10 @@ class AudioFunctions {
 
                     override fun onSkipToNext() {
                         if (playlist.isNotEmpty()) {
-                            val nextIndex = if (repeatMode == "all")
-                                (playlistIndex + 1) % playlist.size
-                            else
-                                minOf(playlistIndex + 1, playlist.size - 1)
-                            playTrackAt(nextIndex, reason = "user_next", afterStarted = {
+                            // On the last track with repeat off there is nothing next — a
+                            // headset or notification "next" used to restart the last track.
+                            if (playlistIndex + 1 >= playlist.size && repeatMode != "all") return
+                            playTrackAt((playlistIndex + 1) % playlist.size, reason = "user_next", afterStarted = {
                                 sendEvent("RemoteNextTrackReceived", statePayload())
                             })
                         } else {
@@ -913,8 +947,9 @@ class AudioFunctions {
 
     class DrainEvents(private val activity: FragmentActivity) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val events = pendingEvents.toList()
-            pendingEvents.clear()
+            val events = synchronized(pendingEvents) {
+                pendingEvents.toList().also { pendingEvents.clear() }
+            }
             return mapOf("success" to true, "events" to events)
         }
     }

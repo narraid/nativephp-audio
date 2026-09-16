@@ -15,6 +15,8 @@ class PlaybackProgressUpdated
         public float $buffered,
         public bool $isBuffering,
         public bool $isPlaying,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }

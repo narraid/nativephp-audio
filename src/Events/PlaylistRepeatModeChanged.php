@@ -11,6 +11,8 @@ class PlaylistRepeatModeChanged
 
     public function __construct(
         public string $mode,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }

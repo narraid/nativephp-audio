@@ -13,6 +13,8 @@ class RemoteSeekReceived
         public array $track,
         public float $position,
         public float $seekTo,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }

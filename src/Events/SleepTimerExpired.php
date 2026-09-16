@@ -9,7 +9,9 @@ class SleepTimerExpired
 {
     use Dispatchable, SerializesModels;
 
-    public function __construct()
-    {
+    public function __construct(
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
+    ) {
     }
 }
