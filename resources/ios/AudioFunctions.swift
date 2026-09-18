@@ -41,6 +41,20 @@ enum AudioFunctions {
     private static var isDucked = false
     private static var isBuffering = false
 
+    // MARK: - Remote Play Guard (car kits / headsets)
+
+    /// Set when the user deliberately pauses — in the app, from the lock screen, or from a
+    /// remote control. Distinct from `pausedByFocusLoss`, where the system interrupted us
+    /// and playback may legitimately resume on its own.
+    private static var userPaused = false
+
+    /// When an audio output device (car kit, headset, CarPlay) last became available.
+    private static var lastDeviceConnectAt: TimeInterval = 0
+
+    /// How long after a device connects a remote PLAY is treated as that device announcing
+    /// itself rather than as a deliberate press by the user.
+    private static let deviceConnectPlayGrace: TimeInterval = 4.0
+
     // MARK: - Playlist State
 
     private static var playlist: [[String: Any]] = []
@@ -300,7 +314,8 @@ enum AudioFunctions {
         player     = nil
         playerItem = nil
         removeObservers()
-        pausedByFocusLoss = false
+        clearPauseIntent()
+        lastDeviceConnectAt = 0
         deactivateAudioSession()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
@@ -336,6 +351,7 @@ enum AudioFunctions {
 
         preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
                       album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
+        clearPauseIntent()
         player?.play()
         if playbackRate != 1.0 { player?.rate = playbackRate }
         if seekTo > 0 { player?.seek(to: CMTime(seconds: seekTo, preferredTimescale: 1000)) }
@@ -429,6 +445,13 @@ enum AudioFunctions {
         center.playCommand.isEnabled = true
         center.playCommand.addTarget { _ in
             guard player != nil else { return .noSuchContent }
+            if isDeviceConnectAutoPlay() {
+                // A car kit or headset announcing itself, not a person pressing play.
+                // Re-publish the paused state so the device's display agrees with us.
+                syncNowPlayingState()
+                return .success
+            }
+            clearPauseIntent()
             player?.play()
             if playbackRate != 1.0 { player?.rate = playbackRate }
             startProgressTimer(interval: progressInterval)
@@ -442,6 +465,7 @@ enum AudioFunctions {
         center.pauseCommand.isEnabled = true
         center.pauseCommand.addTarget { _ in
             guard player != nil else { return .noSuchContent }
+            markUserPaused()
             player?.pause()
             stopProgressTimer()
             syncNowPlayingState()
@@ -455,6 +479,7 @@ enum AudioFunctions {
         center.togglePlayPauseCommand.addTarget { _ in
             guard let p = player else { return .noSuchContent }
             if p.rate > 0 {
+                markUserPaused()
                 p.pause()
                 stopProgressTimer()
                 syncNowPlayingState()
@@ -462,6 +487,11 @@ enum AudioFunctions {
                 sendEvent("PlaybackPaused",      payload)
                 sendEvent("RemotePauseReceived", payload)
             } else {
+                if isDeviceConnectAutoPlay() {
+                    syncNowPlayingState()
+                    return .success
+                }
+                clearPauseIntent()
                 p.play()
                 if playbackRate != 1.0 { p.rate = playbackRate }
                 startProgressTimer(interval: progressInterval)
@@ -524,6 +554,34 @@ enum AudioFunctions {
         }
     }
 
+    // MARK: - Pause Intent / Remote Play Guard
+
+    /// Records that the pause came from the user, not from the system interrupting us.
+    private static func markUserPaused() {
+        userPaused = true
+        // An interruption earlier in the session must not resume what the user has now
+        // deliberately stopped, so drop any pending auto-resume.
+        pausedByFocusLoss = false
+    }
+
+    /// Playback is starting because something asked for it — clear both pause flags.
+    private static func clearPauseIntent() {
+        userPaused = false
+        pausedByFocusLoss = false
+    }
+
+    /// True when a remote PLAY arrived because a device just connected rather than because a
+    /// person pressed play. Car kits routinely fire a play command the moment Bluetooth or
+    /// CarPlay connects, which would otherwise restart audio the user deliberately paused.
+    ///
+    /// Only the window right after a connect is guarded, so play from the car's own controls
+    /// still works once the connection has settled.
+    private static func isDeviceConnectAutoPlay() -> Bool {
+        userPaused
+            && lastDeviceConnectAt > 0
+            && Date().timeIntervalSinceReferenceDate - lastDeviceConnectAt < deviceConnectPlayGrace
+    }
+
     // MARK: - Audio Session Observers (interruptions + route changes)
 
     private static func setupAudioSessionObservers() {
@@ -551,7 +609,7 @@ enum AudioFunctions {
                 let opts = AVAudioSession.InterruptionOptions(
                     rawValue: notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 )
-                if opts.contains(.shouldResume) && pausedByFocusLoss {
+                if opts.contains(.shouldResume) && pausedByFocusLoss && !userPaused {
                     pausedByFocusLoss = false
                     try? AVAudioSession.sharedInstance().setActive(true)
                     player?.play()
@@ -577,8 +635,16 @@ enum AudioFunctions {
             object: nil, queue: .main
         ) { notification in
             guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue),
-                  reason == .oldDeviceUnavailable,
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
+
+            if reason == .newDeviceAvailable {
+                // A car kit, CarPlay or headset just became available. Note the moment so a
+                // play command it sends on connect can be told apart from a real button press.
+                lastDeviceConnectAt = Date().timeIntervalSinceReferenceDate
+                return
+            }
+
+            guard reason == .oldDeviceUnavailable,
                   player != nil, player?.rate ?? 0 > 0 else { return }
 
             player?.pause()
@@ -729,6 +795,9 @@ enum AudioFunctions {
 
             AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
                                          album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
+            // Loaded on purpose without playing: treat it like a pause so a car kit
+            // connecting later cannot start it on its own.
+            AudioFunctions.markUserPaused()
             AudioFunctions.syncNowPlayingState()
 
             var trackChangedPayload: [String: Any] = ["index": 0, "reason": "user_selected", "track": AudioFunctions.trackPayload()]
@@ -741,7 +810,7 @@ enum AudioFunctions {
 
             // Defer PlaybackLoaded until AVPlayerItem.status == .readyToPlay, matching Android's
             // onPrepared behaviour — the caller can safely call resume() when this fires.
-``            var loadedSent = false
+            var loadedSent = false
             let fireLoaded = {
                 guard !loadedSent else { return }
                 loadedSent = true
@@ -789,6 +858,7 @@ enum AudioFunctions {
             AudioFunctions.preparePlayer(urlString: urlString, url: url, title: title, artist: artist,
                                          album: album, artwork: artwork, duration: duration, clip: clip, metadata: metadata)
 
+            AudioFunctions.clearPauseIntent()
             AudioFunctions.player?.play()
             if AudioFunctions.playbackRate != 1.0 { AudioFunctions.player?.rate = AudioFunctions.playbackRate }
             AudioFunctions.syncNowPlayingState()
@@ -809,6 +879,9 @@ enum AudioFunctions {
 
     class Pause: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            // Recorded before the early return: pausing while an interruption has already
+            // stopped playback must still cancel the pending auto-resume.
+            AudioFunctions.markUserPaused()
             guard AudioFunctions.player != nil, AudioFunctions.player?.rate ?? 0 > 0 else {
                 return BridgeResponse.success(data: ["success": true])
             }
@@ -822,6 +895,7 @@ enum AudioFunctions {
 
     class Resume: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
+            AudioFunctions.clearPauseIntent()
             // Cold-start: playlist was set with autoPlay=false, no player exists yet
             if AudioFunctions.player == nil && !AudioFunctions.playlist.isEmpty && AudioFunctions.playlistIndex >= 0 {
                 let seekTo = AudioFunctions.pendingSeekSeconds

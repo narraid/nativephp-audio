@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -12,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -60,6 +63,31 @@ class AudioFunctions {
         internal var userVolume: Float = 1.0f
         private var pausedByFocusLoss = false
         private var isDucked = false
+
+        // ── Remote Play Guard (car kits / headsets) ───────────────────────────
+        /**
+         * Set when the user deliberately pauses — in the app, from the notification, or
+         * from a remote control. Distinct from [pausedByFocusLoss], which means the system
+         * took audio focus away and playback may legitimately resume on its own.
+         */
+        private var userPaused = false
+
+        /** Monotonic timestamp of the last audio output device (car kit, headset) connect. */
+        private var lastDeviceConnectAtMs = 0L
+
+        /**
+         * How long after a device connects a remote PLAY is treated as that device
+         * announcing itself rather than as a deliberate press by the user.
+         */
+        private const val DEVICE_CONNECT_PLAY_GRACE_MS = 4_000L
+
+        private var audioDeviceCallback: Any? = null
+
+        /**
+         * registerAudioDeviceCallback fires onAudioDevicesAdded immediately with the devices
+         * already connected. That first burst is not a connect event and must not arm the guard.
+         */
+        private var deviceCallbackPrimed = false
 
         // ── Playback Settings ─────────────────────────────────────────────────
         private var playbackRate: Float = 1.0f
@@ -237,6 +265,14 @@ class AudioFunctions {
                 session.isActive = true
                 session.setCallback(object : MediaSessionCompat.Callback() {
                     override fun onPlay() {
+                        if (isDeviceConnectAutoPlay()) {
+                            // A car kit or headset announcing itself, not a person pressing
+                            // play. Re-publish the paused state so the device's UI agrees.
+                            updateSessionState()
+                            activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                            return
+                        }
+                        clearPauseIntent()
                         mediaPlayer?.start()
                         applyPlaybackRate()
                         updateSessionState()
@@ -248,6 +284,7 @@ class AudioFunctions {
                     }
 
                     override fun onPause() {
+                        markUserPaused()
                         mediaPlayer?.pause()
                         stopProgressTimer()
                         updateSessionState()
@@ -307,6 +344,7 @@ class AudioFunctions {
 
         fun togglePlayPause() {
             if (mediaPlayer?.isPlaying == true) {
+                markUserPaused()
                 mediaPlayer?.pause()
                 stopProgressTimer()
                 updateSessionState()
@@ -314,6 +352,7 @@ class AudioFunctions {
                 sendEvent("PlaybackPaused",      payload)
                 sendEvent("RemotePauseReceived", payload)
             } else {
+                clearPauseIntent()
                 mediaPlayer?.start()
                 applyPlaybackRate()
                 updateSessionState()
@@ -375,6 +414,82 @@ class AudioFunctions {
             } catch (_: Exception) { /* not all streams support rate changes */ }
         }
 
+        // ── Pause Intent / Remote Play Guard ──────────────────────────────────
+
+        /** Records that the pause came from the user, not from the system taking focus. */
+        private fun markUserPaused() {
+            userPaused = true
+            // A focus loss earlier in the session must not resume what the user has now
+            // deliberately stopped, so drop any pending auto-resume.
+            pausedByFocusLoss = false
+        }
+
+        /** Playback is starting because something asked for it — clear both pause flags. */
+        private fun clearPauseIntent() {
+            userPaused = false
+            pausedByFocusLoss = false
+        }
+
+        /**
+         * True when a remote PLAY arrived because a device just connected rather than because
+         * a person pressed play. Car kits routinely fire an AVRCP PLAY the moment Bluetooth
+         * connects, which would otherwise restart audio the user deliberately paused.
+         *
+         * Only guards the window right after a connect, so play from the car's own controls
+         * still works once the connection has settled. On API < 23 there is no device-connect
+         * signal, so the guard never trips and behaviour is unchanged.
+         */
+        private fun isDeviceConnectAutoPlay(): Boolean =
+            userPaused &&
+                lastDeviceConnectAtMs > 0L &&
+                SystemClock.elapsedRealtime() - lastDeviceConnectAtMs < DEVICE_CONNECT_PLAY_GRACE_MS
+
+        /** Output devices whose arrival makes a car kit or headset send an unsolicited PLAY. */
+        private fun isRemoteCapableOutput(type: Int): Boolean =
+            type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                type == AudioDeviceInfo.TYPE_USB_DEVICE ||
+                type == AudioDeviceInfo.TYPE_DOCK
+
+        /**
+         * Watch for device connects without requesting focus, so a track that was loaded but
+         * deliberately left paused is protected too.
+         */
+        private fun ensureDeviceConnectMonitor(context: Context) {
+            val am = audioManager
+                ?: (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager).also { audioManager = it }
+            registerDeviceConnectMonitor(am)
+        }
+
+        private fun registerDeviceConnectMonitor(am: AudioManager) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || audioDeviceCallback != null) return
+            deviceCallbackPrimed = false
+            val callback = object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                    if (!deviceCallbackPrimed) {
+                        // The synchronous first call lists devices already connected.
+                        deviceCallbackPrimed = true
+                        return
+                    }
+                    val connected = addedDevices?.any { it.isSink && isRemoteCapableOutput(it.type) } == true
+                    if (connected) lastDeviceConnectAtMs = SystemClock.elapsedRealtime()
+                }
+            }
+            audioDeviceCallback = callback
+            am.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+        }
+
+        private fun unregisterDeviceConnectMonitor(am: AudioManager) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+            (audioDeviceCallback as? AudioDeviceCallback)?.let { am.unregisterAudioDeviceCallback(it) }
+            audioDeviceCallback = null
+            deviceCallbackPrimed = false
+            lastDeviceConnectAtMs = 0L
+        }
+
         // ── Audio Focus ───────────────────────────────────────────────────────
 
         private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
@@ -411,7 +526,7 @@ class AudioFunctions {
                 AudioManager.AUDIOFOCUS_GAIN -> {
                     isDucked = false
                     mediaPlayer?.setVolume(userVolume, userVolume)
-                    if (pausedByFocusLoss && mediaPlayer != null) {
+                    if (pausedByFocusLoss && !userPaused && mediaPlayer != null) {
                         pausedByFocusLoss = false
                         mediaPlayer?.start()
                         applyPlaybackRate()
@@ -428,6 +543,7 @@ class AudioFunctions {
         fun requestAudioFocus(context: Context) {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             audioManager = am
+            registerDeviceConnectMonitor(am)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                     .setAudioAttributes(
@@ -449,6 +565,7 @@ class AudioFunctions {
 
         fun abandonAudioFocus() {
             val am = audioManager ?: return
+            unregisterDeviceConnectMonitor(am)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
             } else {
@@ -457,7 +574,7 @@ class AudioFunctions {
             }
             audioManager = null
             audioFocusRequest = null
-            pausedByFocusLoss = false
+            clearPauseIntent()
         }
 
         // ── Progress Timer ────────────────────────────────────────────────────
@@ -557,6 +674,7 @@ class AudioFunctions {
                         setOnPreparedListener { mp ->
                             mp.setVolume(userVolume, userVolume)
                             applyPlaybackRate()
+                            clearPauseIntent()
                             requestAudioFocus(ctx)
                             mp.start()
                             if (seekToSeconds > 0) seekToMs((seekToSeconds * 1000).toLong())
@@ -657,6 +775,7 @@ class AudioFunctions {
                             if (autoPlay) {
                                 mp.setVolume(userVolume, userVolume)
                                 applyPlaybackRate()
+                                clearPauseIntent()
                                 requestAudioFocus(ctx)
                                 mp.start()
                                 updateSessionState()
@@ -664,6 +783,10 @@ class AudioFunctions {
                                 AudioService.start(ctx, metaTitle ?: "Now Playing", metaArtist)
                                 sendEvent("PlaybackStarted", mapOf("track" to trackPayload(), "position" to 0.0))
                             } else {
+                                // Loaded on purpose without playing: treat it like a pause so a
+                                // car kit connecting later cannot start it on its own.
+                                markUserPaused()
+                                ensureDeviceConnectMonitor(ctx)
                                 updateSessionState()
                                 sendEvent("PlaybackLoaded", mapOf("track" to trackPayload()))
                             }
@@ -796,6 +919,9 @@ class AudioFunctions {
 
     class Pause(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            // Recorded before the early return: pausing while a focus loss has already
+            // stopped playback must still cancel the pending auto-resume.
+            markUserPaused()
             if (mediaPlayer?.isPlaying != true) return mapOf("success" to true)
             mediaPlayer?.pause()
             stopProgressTimer()
@@ -808,6 +934,7 @@ class AudioFunctions {
 
     class Resume(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            clearPauseIntent()
             // Cold-start: playlist was set with autoPlay=false, no player exists yet
             if (mediaPlayer == null && playlist.isNotEmpty() && playlistIndex >= 0) {
                 val seekTo = pendingSeekSeconds

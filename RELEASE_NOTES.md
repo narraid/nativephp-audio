@@ -1,3 +1,11 @@
+## 🎵 NativePHP Audio Player v8.0.2
+
+### Fixes
+- **iOS / Android**: Paused audio no longer starts by itself when the phone connects to a car kit, CarPlay or a headset. Bluetooth devices routinely send a PLAY command the instant they connect; a play command arriving within 4 seconds of a device connecting is now ignored while playback is deliberately paused. Pressing play on the car's own controls still works, as does every other remote command.
+- **iOS / Android**: An explicit `pause()` now cancels a pending auto-resume from an earlier interruption. Previously, pausing while a phone call or navigation prompt had already stopped playback left the resume-on-focus-gain flag set, so playback restarted when the interruption ended.
+- **iOS / Android**: A track loaded with `load()` but never played is treated as deliberately paused, so a device connecting later cannot start it.
+- **iOS**: Fixed stray characters in `AudioFunctions.swift` that prevented the file from compiling.
+
 ## 🎵 NativePHP Audio Player v7.1.0
 
 ### Fixes
