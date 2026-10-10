@@ -132,14 +132,38 @@ enum AudioFunctions {
         return t
     }
 
-    private static func statePayload() -> [String: Any] {
-        [
+    private static func statePayload(cause: String? = nil) -> [String: Any] {
+        var payload: [String: Any] = [
             "track":       trackPayload(),
             "position":    positionSeconds(),
             "buffered":    bufferedSeconds(),
             "isPlaying":   (player?.rate ?? 0) > 0,
             "isBuffering": isBuffering,
+            "rate":        Double(playbackRate),
+            "output":      currentOutput(),
         ]
+        if let cause = cause { payload["cause"] = cause }
+        return payload
+    }
+
+    // MARK: - Output Route
+
+    private static func outputName(for port: AVAudioSession.Port) -> String {
+        switch port {
+        case .builtInSpeaker, .builtInReceiver: return "speaker"
+        case .headphones, .headsetMic: return "headphones"
+        case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE: return "bluetooth"
+        case .airPlay: return "airplay"
+        case .carAudio: return "car"
+        case .usbAudio: return "usb"
+        case .HDMI: return "hdmi"
+        default: return "other"
+        }
+    }
+
+    private static func currentOutput() -> String {
+        guard let port = AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType else { return "other" }
+        return outputName(for: port)
     }
 
     // MARK: - Position / Duration / Buffered
@@ -381,6 +405,7 @@ enum AudioFunctions {
 
     static func startProgressTimer(interval: Double) {
         stopProgressTimer()
+        startHeartbeatTimer()
         guard interval > 0, let p = player else { return }
         let cmInterval = CMTime(seconds: interval, preferredTimescale: 600)
         progressObserver = p.addPeriodicTimeObserver(forInterval: cmInterval, queue: .main) { _ in
@@ -396,6 +421,29 @@ enum AudioFunctions {
             progressObserver = nil
             progressObserverPlayer = nil
         }
+        stopHeartbeatTimer()
+    }
+
+    // MARK: - Heartbeat Timer
+
+    static var heartbeatInterval: Double = 0
+    private static var heartbeatTimer: Timer?
+
+    /// PlaybackHeartbeat every `heartbeatInterval` seconds while playing; queued, never merged, in the background.
+    static func startHeartbeatTimer() {
+        stopHeartbeatTimer()
+        guard heartbeatInterval > 0 else { return }
+        let timer = Timer(timeInterval: heartbeatInterval, repeats: true) { _ in
+            guard player?.rate ?? 0 > 0 else { return }
+            sendEvent("PlaybackHeartbeat", statePayload())
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        heartbeatTimer = timer
+    }
+
+    static func stopHeartbeatTimer() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
     }
 
     // MARK: - Sleep Timer
@@ -404,7 +452,7 @@ enum AudioFunctions {
         sleepTimer?.cancel()
         let item = DispatchWorkItem {
             guard AudioFunctions.player != nil else { return }
-            let payload = AudioFunctions.statePayload()
+            let payload = AudioFunctions.statePayload(cause: "sleep_timer")
             AudioFunctions.resetPlayer()
             AudioFunctions.sendEvent("PlaybackStopped",    payload)
             AudioFunctions.sendEvent("SleepTimerExpired",  [:])
@@ -445,7 +493,7 @@ enum AudioFunctions {
             player?.pause()
             stopProgressTimer()
             syncNowPlayingState()
-            let payload = statePayload()
+            let payload = statePayload(cause: "remote")
             sendEvent("PlaybackPaused",      payload)
             sendEvent("RemotePauseReceived", payload)
             return .success
@@ -458,7 +506,7 @@ enum AudioFunctions {
                 p.pause()
                 stopProgressTimer()
                 syncNowPlayingState()
-                let payload = statePayload()
+                let payload = statePayload(cause: "remote")
                 sendEvent("PlaybackPaused",      payload)
                 sendEvent("RemotePauseReceived", payload)
             } else {
@@ -516,7 +564,7 @@ enum AudioFunctions {
         center.stopCommand.isEnabled = true
         center.stopCommand.addTarget { _ in
             guard player != nil else { return .noSuchContent }
-            let payload = statePayload()
+            let payload = statePayload(cause: "remote")
             resetPlayer()
             sendEvent("PlaybackStopped",    payload)
             sendEvent("RemoteStopReceived", payload)
@@ -543,7 +591,7 @@ enum AudioFunctions {
                 player?.pause()
                 stopProgressTimer()
                 syncNowPlayingState()
-                let payload = statePayload()
+                let payload = statePayload(cause: "focus_loss_transient")
                 sendEvent("PlaybackPaused",          payload)
                 sendEvent("AudioFocusLostTransient", payload)
 
@@ -577,16 +625,26 @@ enum AudioFunctions {
             object: nil, queue: .main
         ) { notification in
             guard let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue),
-                  reason == .oldDeviceUnavailable,
-                  player != nil, player?.rate ?? 0 > 0 else { return }
+                  let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
 
-            player?.pause()
-            stopProgressTimer()
-            syncNowPlayingState()
-            let payload = statePayload()
-            sendEvent("PlaybackPaused",          payload)
-            sendEvent("AudioFocusLostTransient", payload)
+            let previousRoute = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+            let previous = previousRoute?.outputs.first.map { outputName(for: $0.portType) } ?? "other"
+            let current = currentOutput()
+
+            if reason == .oldDeviceUnavailable, player != nil, player?.rate ?? 0 > 0 {
+                player?.pause()
+                stopProgressTimer()
+                syncNowPlayingState()
+                sendEvent("PlaybackPaused", statePayload(cause: "route_lost"))
+            }
+
+            guard current != previous else { return }
+
+            var payload = statePayload()
+            payload["output"] = current
+            payload["previousOutput"] = previous
+            payload["reason"] = reason == .newDeviceAvailable ? "new_device" : (reason == .oldDeviceUnavailable ? "device_lost" : "other")
+            sendEvent("AudioRouteChanged", payload)
         }
 
         if silenceHintObserver == nil {
@@ -803,7 +861,7 @@ enum AudioFunctions {
             AudioFunctions.player?.pause()
             AudioFunctions.stopProgressTimer()
             AudioFunctions.syncNowPlayingState()
-            AudioFunctions.sendEvent("PlaybackPaused", AudioFunctions.statePayload())
+            AudioFunctions.sendEvent("PlaybackPaused", AudioFunctions.statePayload(cause: "user"))
             return BridgeResponse.success(data: ["success": true])
         }
     }
@@ -829,7 +887,7 @@ enum AudioFunctions {
 
     class Stop: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let payload = AudioFunctions.statePayload()
+            let payload = AudioFunctions.statePayload(cause: "user")
             AudioFunctions.resetPlayer()
             AudioFunctions.sendEvent("PlaybackStopped", payload)
             return BridgeResponse.success(data: ["success": true])
@@ -838,7 +896,7 @@ enum AudioFunctions {
 
     class Reset: BridgeFunction {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
-            let payload = AudioFunctions.statePayload()
+            let payload = AudioFunctions.statePayload(cause: "reset")
             AudioFunctions.resetPlayer()
             AudioFunctions.playlist      = []
             AudioFunctions.playlistIndex = -1
@@ -912,6 +970,20 @@ enum AudioFunctions {
                 AudioFunctions.startProgressTimer(interval: clamped)
             }
             return BridgeResponse.success(data: ["success": true, "seconds": clamped])
+        }
+    }
+
+    class SetHeartbeatInterval: BridgeFunction {
+        func execute(parameters: [String: Any]) throws -> [String: Any] {
+            let raw = (parameters["seconds"] as? NSNumber)?.doubleValue ?? 0
+            let seconds = raw <= 0 ? 0 : max(5.0, min(600.0, raw))
+            AudioFunctions.heartbeatInterval = seconds
+            if AudioFunctions.player?.rate ?? 0 > 0 {
+                AudioFunctions.startHeartbeatTimer()
+            } else {
+                AudioFunctions.stopHeartbeatTimer()
+            }
+            return BridgeResponse.success(data: ["success": true, "seconds": seconds])
         }
     }
 
