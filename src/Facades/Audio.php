@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static bool        setVolume(float $level)
  * @method static bool        setPlaybackRate(float $rate)
  * @method static bool        setProgressInterval(float $seconds)
+ * @method static bool        setHeartbeatInterval(float $seconds)
  * @method static float|null  getDuration()
  * @method static float|null  getCurrentPosition()
  * @method static array|null  getProgress()

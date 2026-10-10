@@ -69,6 +69,12 @@
             "description": "Set how often PlaybackProgressUpdated events fire, in seconds (0.5 to 60)"
         },
         {
+            "name": "Audio.setHeartbeatInterval",
+            "android": "com.narraid.audio.AudioFunctions.SetHeartbeatInterval",
+            "ios": "AudioFunctions.SetHeartbeatInterval",
+            "description": "Fire PlaybackHeartbeat every N seconds while playing (5 to 600, 0 disables). Never merged in the background queue."
+        },
+        {
             "name": "Audio.getDuration",
             "android": "com.narraid.audio.AudioFunctions.GetDuration",
             "ios": "AudioFunctions.GetDuration",
