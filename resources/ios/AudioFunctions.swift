@@ -631,7 +631,10 @@ enum AudioFunctions {
             let previous = previousRoute?.outputs.first.map { outputName(for: $0.portType) } ?? "other"
             let current = currentOutput()
 
-            if reason == .oldDeviceUnavailable, player != nil, player?.rate ?? 0 > 0 {
+            // AVPlayer may already have paused itself for the unplug, so "was playing"
+            // is our own progress timer still running, not the current rate.
+            let wasPlaying = (player?.rate ?? 0) > 0 || progressObserver != nil
+            if reason == .oldDeviceUnavailable, player != nil, wasPlaying {
                 player?.pause()
                 stopProgressTimer()
                 syncNowPlayingState()
