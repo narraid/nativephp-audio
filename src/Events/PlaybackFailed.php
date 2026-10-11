@@ -12,6 +12,8 @@ class PlaybackFailed
     public function __construct(
         public array $track,
         public string $error,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }

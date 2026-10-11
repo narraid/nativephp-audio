@@ -1,9 +1,14 @@
 package com.narraid.audio
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -15,6 +20,7 @@ import android.os.Looper
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.nativephp.mobile.bridge.BridgeFunction
 import com.nativephp.mobile.lifecycle.NativePHPLifecycle
@@ -49,6 +55,9 @@ class AudioFunctions {
         // ── Background Event Queue ────────────────────────────────────────────
         private var isInBackground = false
         private val pendingEvents: MutableList<Map<String, Any>> = mutableListOf()
+
+        /** Upper bound on queued events, so a very long background session can't grow memory without limit. */
+        private const val MAX_PENDING_EVENTS = 5000
 
         // ── Audio Focus ───────────────────────────────────────────────────────
         private const val DUCK_FACTOR = 0.2f
@@ -103,17 +112,49 @@ class AudioFunctions {
         private const val EVENT_PREFIX = "Narraid\\Audio\\Events\\"
 
         internal fun sendEvent(name: String, payload: Map<String, Any>) {
-            if (isInBackground) {
-                pendingEvents.add(mapOf("event" to name, "payload" to payload))
+            // Every event carries its own time (epoch ms), so PHP can place events
+            // replayed from the background queue at the moment they happened.
+            val stamped: Map<String, Any> = payload + ("at" to System.currentTimeMillis())
+
+            val activity = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
+
+            // Queue while backgrounded — and when there is no live activity to
+            // deliver to, which used to drop the event (a lost pause or completion).
+            if (isInBackground || activity == null) {
+                queueEvent(name, stamped)
                 return
             }
-            val activity = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
-                ?: return
-            val json = JSONObject(payload).toString()
+
+            val json = JSONObject(stamped).toString()
             Handler(Looper.getMainLooper()).post {
                 val act = activityRef?.get()?.takeIf { !it.isDestroyed && !it.isFinishing }
-                    ?: return@post
+                if (act == null) {
+                    queueEvent(name, stamped)
+                    return@post
+                }
                 NativeActionCoordinator.dispatchEvent(act, EVENT_PREFIX + name, json)
+            }
+        }
+
+        /**
+         * A progress event replaces a progress event queued right before it — PHP
+         * measures the gap between the two `at` values, so no listening time is
+         * lost — and the queue is capped.
+         */
+        private fun queueEvent(name: String, payload: Map<String, Any>) {
+            val event = mapOf("event" to name, "payload" to payload)
+
+            synchronized(pendingEvents) {
+                if (name == "PlaybackProgressUpdated" && pendingEvents.lastOrNull()?.get("event") == "PlaybackProgressUpdated") {
+                    pendingEvents[pendingEvents.size - 1] = event
+                    return
+                }
+
+                if (pendingEvents.size >= MAX_PENDING_EVENTS) {
+                    pendingEvents.removeAt(0)
+                }
+
+                pendingEvents.add(event)
             }
         }
 
@@ -129,13 +170,93 @@ class AudioFunctions {
             return m
         }
 
-        private fun statePayload(): Map<String, Any> = mapOf(
-            "track"       to trackPayload(),
-            "position"    to positionSeconds(),
-            "buffered"    to bufferedSeconds(),
-            "isPlaying"   to (mediaPlayer?.isPlaying == true),
-            "isBuffering" to isBuffering,
-        )
+        private fun statePayload(cause: String? = null): Map<String, Any> {
+            val payload = mutableMapOf<String, Any>(
+                "track"       to trackPayload(),
+                "position"    to positionSeconds(),
+                "buffered"    to bufferedSeconds(),
+                "isPlaying"   to (mediaPlayer?.isPlaying == true),
+                "isBuffering" to isBuffering,
+                "rate"        to playbackRate.toDouble(),
+                "output"      to currentOutput(),
+            )
+            cause?.let { payload["cause"] = it }
+            return payload
+        }
+
+        // ── Output Route ──────────────────────────────────────────────────────
+
+        private var outputName: String? = null
+        private var noisyReceiver: BroadcastReceiver? = null
+        private var deviceCallback: AudioDeviceCallback? = null
+
+        /** A2DP, SCO, BLE headset (26) and BLE speaker (27) — the BLE constants are API 31+. */
+        private val BLUETOOTH_OUTPUTS = setOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, 26, 27)
+
+        private fun currentOutput(): String = outputName ?: detectOutput().also { outputName = it }
+
+        private fun detectOutput(): String {
+            val am = audioManager
+                ?: (activityRef?.get()?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+                ?: (appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+                ?: return "other"
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                @Suppress("DEPRECATION")
+                return when {
+                    am.isBluetoothA2dpOn -> "bluetooth"
+                    am.isWiredHeadsetOn  -> "headphones"
+                    else                 -> "speaker"
+                }
+            }
+            val types = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type }.toSet()
+            return when {
+                types.any { it in BLUETOOTH_OUTPUTS } -> "bluetooth"
+                AudioDeviceInfo.TYPE_BUS in types -> "car"
+                types.any { it == AudioDeviceInfo.TYPE_USB_HEADSET || it == AudioDeviceInfo.TYPE_USB_DEVICE } -> "usb"
+                types.any { it == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || it == AudioDeviceInfo.TYPE_WIRED_HEADSET } -> "headphones"
+                AudioDeviceInfo.TYPE_HDMI in types -> "hdmi"
+                else -> "speaker"
+            }
+        }
+
+        /** Pause on headphone unplug (Android sends no pause itself) and report output changes. */
+        fun ensureRouteMonitoring(context: Context) {
+            if (noisyReceiver != null) return
+            val app = context.applicationContext
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    if (intent.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
+                    if (mediaPlayer?.isPlaying != true) return
+                    mediaPlayer?.pause()
+                    stopProgressTimer()
+                    updateSessionState()
+                    activityRef?.get()?.let { AudioService.refreshPlayState(it) }
+                    sendEvent("PlaybackPaused", statePayload(cause = "route_lost"))
+                }
+            }
+            ContextCompat.registerReceiver(app, receiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY), ContextCompat.RECEIVER_NOT_EXPORTED)
+            noisyReceiver = receiver
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val callback = object : AudioDeviceCallback() {
+                    override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = onRouteMaybeChanged("new_device")
+                    override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = onRouteMaybeChanged("device_lost")
+                }
+                am.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+                deviceCallback = callback
+            }
+        }
+
+        private fun onRouteMaybeChanged(reason: String) {
+            val previous = outputName
+            val current = detectOutput()
+            outputName = current
+            if (previous == null || previous == current) return
+            sendEvent("AudioRouteChanged", statePayload() + mapOf(
+                "output" to current, "previousOutput" to previous, "reason" to reason,
+            ))
+        }
 
         // ── Position / Duration / Buffered ────────────────────────────────────
 
@@ -217,18 +338,17 @@ class AudioFunctions {
                         stopProgressTimer()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = statePayload()
+                        val payload = statePayload(cause = "remote")
                         sendEvent("PlaybackPaused",      payload)
                         sendEvent("RemotePauseReceived", payload)
                     }
 
                     override fun onSkipToNext() {
                         if (playlist.isNotEmpty()) {
-                            val nextIndex = if (repeatMode == "all")
-                                (playlistIndex + 1) % playlist.size
-                            else
-                                minOf(playlistIndex + 1, playlist.size - 1)
-                            playTrackAt(nextIndex, reason = "user_next", afterStarted = {
+                            // On the last track with repeat off there is nothing next — a
+                            // headset or notification "next" used to restart the last track.
+                            if (playlistIndex + 1 >= playlist.size && repeatMode != "all") return
+                            playTrackAt((playlistIndex + 1) % playlist.size, reason = "user_next", afterStarted = {
                                 sendEvent("RemoteNextTrackReceived", statePayload())
                             })
                         } else {
@@ -256,7 +376,7 @@ class AudioFunctions {
                     }
 
                     override fun onStop() {
-                        val payload = statePayload()
+                        val payload = statePayload(cause = "remote")
                         releasePlayer()
                         sendEvent("PlaybackStopped",    payload)
                         sendEvent("RemoteStopReceived", payload)
@@ -276,7 +396,7 @@ class AudioFunctions {
                 mediaPlayer?.pause()
                 stopProgressTimer()
                 updateSessionState()
-                val payload = statePayload()
+                val payload = statePayload(cause = "remote")
                 sendEvent("PlaybackPaused",      payload)
                 sendEvent("RemotePauseReceived", payload)
             } else {
@@ -323,12 +443,22 @@ class AudioFunctions {
 
         // ── Playback Rate ─────────────────────────────────────────────────────
 
+        /**
+         * Push [playbackRate] onto the player. Applies 1.0f as readily as any other
+         * speed: skipping it would strand the player on whatever speed was set last.
+         */
         private fun applyPlaybackRate() {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && playbackRate != 1.0f) {
-                try {
-                    mediaPlayer?.playbackParams = PlaybackParams().setSpeed(playbackRate)
-                } catch (_: Exception) { /* not all streams support rate changes */ }
-            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+
+            val player = mediaPlayer ?: return
+
+            try {
+                if (player.playbackParams.speed == playbackRate) return
+            } catch (_: Exception) { /* params aren't readable yet - set them below */ }
+
+            try {
+                player.playbackParams = PlaybackParams().setSpeed(playbackRate)
+            } catch (_: Exception) { /* not all streams support rate changes */ }
         }
 
         // ── Audio Focus ───────────────────────────────────────────────────────
@@ -342,7 +472,7 @@ class AudioFunctions {
                         stopProgressTimer()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = statePayload()
+                        val payload = statePayload(cause = "focus_loss")
                         sendEvent("PlaybackPaused",  payload)
                         sendEvent("AudioFocusLost",  payload)
                     }
@@ -354,7 +484,7 @@ class AudioFunctions {
                         stopProgressTimer()
                         updateSessionState()
                         activityRef?.get()?.let { AudioService.refreshPlayState(it) }
-                        val payload = statePayload()
+                        val payload = statePayload(cause = "focus_loss_transient")
                         sendEvent("PlaybackPaused",          payload)
                         sendEvent("AudioFocusLostTransient", payload)
                     }
@@ -382,6 +512,7 @@ class AudioFunctions {
         }
 
         fun requestAudioFocus(context: Context) {
+            ensureRouteMonitoring(context)
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             audioManager = am
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -420,6 +551,7 @@ class AudioFunctions {
 
         fun startProgressTimer(intervalMs: Long) {
             stopProgressTimer()
+            startHeartbeatTimer()
             if (intervalMs <= 0) return
             val handler = Handler(Looper.getMainLooper())
             progressHandler = handler
@@ -440,6 +572,37 @@ class AudioFunctions {
             progressRunnable?.let { progressHandler?.removeCallbacks(it) }
             progressHandler  = null
             progressRunnable = null
+            stopHeartbeatTimer()
+        }
+
+        // ── Heartbeat Timer ───────────────────────────────────────────────────
+
+        private var heartbeatIntervalMs: Long = 0
+        private var heartbeatHandler: Handler? = null
+        private var heartbeatRunnable: Runnable? = null
+
+        /** PlaybackHeartbeat every [heartbeatIntervalMs] while playing; queued, never merged, in the background. */
+        fun startHeartbeatTimer() {
+            stopHeartbeatTimer()
+            val intervalMs = heartbeatIntervalMs
+            if (intervalMs <= 0) return
+            val handler = Handler(Looper.getMainLooper())
+            heartbeatHandler = handler
+            val runnable = object : Runnable {
+                override fun run() {
+                    if (heartbeatRunnable !== this) return
+                    if (mediaPlayer?.isPlaying == true) sendEvent("PlaybackHeartbeat", statePayload())
+                    handler.postDelayed(this, intervalMs)
+                }
+            }
+            heartbeatRunnable = runnable
+            handler.postDelayed(runnable, intervalMs)
+        }
+
+        fun stopHeartbeatTimer() {
+            heartbeatRunnable?.let { heartbeatHandler?.removeCallbacks(it) }
+            heartbeatHandler  = null
+            heartbeatRunnable = null
         }
 
         // ── Playlist Navigation ───────────────────────────────────────────────
@@ -664,7 +827,7 @@ class AudioFunctions {
             val handler = Handler(Looper.getMainLooper())
             val runnable = Runnable {
                 if (mediaPlayer != null) {
-                    val payload = statePayload()
+                    val payload = statePayload(cause = "sleep_timer")
                     releasePlayer()
                     sendEvent("PlaybackStopped",   payload)
                     sendEvent("SleepTimerExpired", emptyMap())
@@ -715,7 +878,7 @@ class AudioFunctions {
             }
         }
 
-        private fun releasePlayer() {
+        internal fun releasePlayer() {
             isBuffering      = false
             bufferingPercent = 0
             cancelSleepTimer()
@@ -757,7 +920,7 @@ class AudioFunctions {
             stopProgressTimer()
             updateSessionState()
             AudioService.refreshPlayState(context)
-            sendEvent("PlaybackPaused", statePayload())
+            sendEvent("PlaybackPaused", statePayload(cause = "user"))
             return mapOf("success" to true)
         }
     }
@@ -784,7 +947,7 @@ class AudioFunctions {
 
     class Stop(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val payload = statePayload()
+            val payload = statePayload(cause = "user")
             releasePlayer()
             sendEvent("PlaybackStopped", payload)
             return mapOf("success" to true)
@@ -793,7 +956,7 @@ class AudioFunctions {
 
     class Reset(private val context: Context) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val payload = statePayload()
+            val payload = statePayload(cause = "reset")
             releasePlayer()
             playlist.clear()
             playlistIndex = -1
@@ -844,7 +1007,12 @@ class AudioFunctions {
             val rate = JSONObject(parameters).optDouble("rate", 1.0)
                 .coerceIn(0.25, 4.0).toFloat()
             playbackRate = rate
-            applyPlaybackRate()
+
+            // Assigning playbackParams starts a paused player, so a paused one keeps
+            // the stored rate and picks it up from the applyPlaybackRate() that runs
+            // alongside its next start().
+            if (mediaPlayer?.isPlaying == true) applyPlaybackRate()
+
             updateSessionState()
             return mapOf("success" to true, "rate" to rate)
         }
@@ -856,6 +1024,16 @@ class AudioFunctions {
             val ms = (seconds * 1000).toLong()
             preferredProgressIntervalMs = ms
             if (mediaPlayer?.isPlaying == true) startProgressTimer(ms)
+            return mapOf("success" to true, "seconds" to seconds)
+        }
+    }
+
+    class SetHeartbeatInterval(private val context: Context) : BridgeFunction {
+        override fun execute(parameters: Map<String, Any>): Map<String, Any> {
+            val raw = JSONObject(parameters).optDouble("seconds", 0.0)
+            val seconds = if (raw <= 0) 0.0 else raw.coerceIn(5.0, 600.0)
+            heartbeatIntervalMs = (seconds * 1000).toLong()
+            if (mediaPlayer?.isPlaying == true) startHeartbeatTimer() else stopHeartbeatTimer()
             return mapOf("success" to true, "seconds" to seconds)
         }
     }
@@ -898,8 +1076,9 @@ class AudioFunctions {
 
     class DrainEvents(private val activity: FragmentActivity) : BridgeFunction {
         override fun execute(parameters: Map<String, Any>): Map<String, Any> {
-            val events = pendingEvents.toList()
-            pendingEvents.clear()
+            val events = synchronized(pendingEvents) {
+                pendingEvents.toList().also { pendingEvents.clear() }
+            }
             return mapOf("success" to true, "events" to events)
         }
     }

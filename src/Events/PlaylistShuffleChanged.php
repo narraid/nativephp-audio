@@ -11,6 +11,8 @@ class PlaylistShuffleChanged
 
     public function __construct(
         public bool $shuffle,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }

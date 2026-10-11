@@ -34,6 +34,7 @@ const audioPlayer = {
     setVolume:           async (level)   => await window.nativephp.call('Audio.setVolume',           { level }),
     setPlaybackRate:     async (rate)    => await window.nativephp.call('Audio.setPlaybackRate',     { rate }),
     setProgressInterval: async (seconds) => await window.nativephp.call('Audio.setProgressInterval', { seconds }),
+    setHeartbeatInterval: async (seconds) => await window.nativephp.call('Audio.setHeartbeatInterval', { seconds }),
 
     getDuration:        async () => await window.nativephp.call('Audio.getDuration'),
     getCurrentPosition: async () => await window.nativephp.call('Audio.getCurrentPosition'),

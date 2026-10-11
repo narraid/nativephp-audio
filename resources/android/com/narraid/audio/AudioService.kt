@@ -29,6 +29,7 @@ import androidx.media.app.NotificationCompat.MediaStyle
  *  - Notification updated by [AudioFunctions.SetMetadata] when metadata arrives.
  *  - Play/pause button toggled by [AudioFunctions.Pause] / [AudioFunctions.Resume].
  *  - Stopped by [AudioFunctions.Stop] when playback ends.
+ *  - Stopped by [onTaskRemoved] when the user swipes the app away from Recents.
  */
 class AudioService : Service() {
 
@@ -73,6 +74,17 @@ class AudioService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * Called when the user swipes the app away from Recents (task removed).
+     * The PHP/app process is going away, so playback must stop here rather
+     * than relying on an explicit Stop call that will never arrive.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        AudioFunctions.releasePlayer()
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
 
     override fun onDestroy() {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)

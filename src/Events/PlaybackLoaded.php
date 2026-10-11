@@ -11,6 +11,8 @@ class PlaybackLoaded
 
     public function __construct(
         public array $track,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }

@@ -13,6 +13,8 @@ class PlaybackSeeked
         public array $track,
         public float $from,
         public float $to,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }
