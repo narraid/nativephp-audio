@@ -117,6 +117,17 @@ class Audio
         return $this->call('Audio.setProgressInterval', ['seconds' => max(0.5, min(60.0, $seconds))]);
     }
 
+    /**
+     * Fire PlaybackHeartbeat every `$seconds` while playing; 0 turns it off. Heartbeats
+     * are never merged in the background queue, unlike progress events.
+     */
+    public function setHeartbeatInterval(float $seconds): bool
+    {
+        $seconds = $seconds <= 0 ? 0.0 : max(5.0, min(600.0, $seconds));
+
+        return $this->call('Audio.setHeartbeatInterval', ['seconds' => $seconds]);
+    }
+
     // ── Getters ───────────────────────────────────────────────────────────────
 
     public function getDuration(): ?float

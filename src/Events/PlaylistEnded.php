@@ -13,6 +13,8 @@ class PlaylistEnded
         public ?int $lastIndex = null,
         public ?array $lastTrack = null,
         public ?float $lastPosition = null,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
     ) {
     }
 }

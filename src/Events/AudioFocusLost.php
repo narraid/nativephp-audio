@@ -15,6 +15,12 @@ class AudioFocusLost
         public float $buffered = 0.0,
         public bool $isBuffering = false,
         public bool $isPlaying = false,
+        /** Epoch milliseconds when the audio engine emitted the event. */
+        public ?int $at = null,
+        /** Playback speed when the event was emitted. */
+        public ?float $rate = null,
+        /** speaker, headphones, bluetooth, airplay, car, usb, hdmi or other. */
+        public ?string $output = null,
     ) {
     }
 }
